@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        /* critical: 首帧防 FOUC，样式文件加载前先撑住背景 */
+        html, body { margin: 0; padding: 0; background: #000; }
+        #splash { position: fixed; inset: 0; z-index: 100; background: #000; }
+    </style>
+    <link rel="stylesheet" href="css/main.css">
+    <link rel="stylesheet" href="css/body.css">
+    <link rel="stylesheet" href="vendor/fontawesome/css/all.min.css">
+    <link rel="stylesheet" href="vendor/css/highlight-dark.min.css">
+</head>
+
+<body>
+    <!-- ==================== 开屏动画 HTML ==================== -->
+    <div id="splash">
+        <div class="geo" id="geo">
+            <div class="rw r1">
+                <div class="rg a"></div>
+            </div>
+            <div class="rw r2">
+                <div class="rg b"></div>
+            </div>
+            <div class="rw r3">
+                <div class="rg c"></div>
+            </div>
+            <div class="rw r4">
+                <div class="rg d"></div>
+            </div>
+            <div class="lw">
+                <div class="ln"></div>
+            </div>
+            <div class="lw">
+                <div class="ln"></div>
+            </div>
+            <div class="lw">
+                <div class="ln"></div>
+            </div>
+            <div class="lw">
+                <div class="ln"></div>
+            </div>
+            <div class="lw">
+                <div class="ln"></div>
+            </div>
+            <div class="lw">
+                <div class="ln"></div>
+            </div>
+            <div class="lw">
+                <div class="ln"></div>
+            </div>
+            <div class="lw">
+                <div class="ln"></div>
+            </div>
+            <div class="ct"></div>
+            <div class="bt">LOADING</div>
+            <div class="sp"></div>
+            <div class="sp"></div>
+            <div class="sp"></div>
+            <div class="sp"></div>
+            <div class="sp"></div>
+            <div class="sp"></div>
+        </div>
+    </div>
+    <!-- ==================== 开屏动画 JS ==================== -->
+    <script src="js/init.js"></script>
+    <!-- ==================== 加载卡顿内容 ==================== -->
+    <script src="vendor/js/marked.min.js"></script>
+    <script src="vendor/js/purify.min.js"></script>
+    <script src="vendor/js/highlight.min.js"></script>
+    <!-- 主内容 -->
+    <div id="app">
+        <!-- 状态栏 -->
+        <div id="status-bar" class="pywebview-drag-region">
+            <span class="dot off" id="sb-dot"></span>
+            <span id="sb-status">未连接</span>
+            <span class="sep"></span>
+            <span id="sb-port">端口: --</span>
+            <span class="sep"></span>
+            <span id="sb-page">页面: --</span>
+            <span class="sep"></span>
+            <span id="sb-cwd" title="">CWD: --</span>
+            <span class="spacer"></span>
+            <button data-action="toggle-settings" title="设置"><i class="fa-solid fa-gear"></i></button>
+            <span class="win-ctrl">
+                <button data-action="win-minimize" title="最小化"><i
+                        class="fa-solid fa-minus"></i></button>
+                <button id="btn-max" data-action="win-maximize" title="最大化"><i
+                        class="fa-solid fa-window-maximize"></i></button>
+                <button class="btn-close" data-action="win-close" title="关闭"><i
+                        class="fa-solid fa-xmark"></i></button>
+            </span>
+        </div>
+        <!-- ====== 主体：小窗单列 / 大屏左右分栏 ====== -->
+        <div id="main-body">
+            <div id="left-col">
+        <!-- 对话卡片 -->
+        <div class="card chat-area">
+            <div class="card-header">
+                <span><i class="fa-solid fa-comments"></i> 对话</span>
+                <button id="btn-init" data-action="initialize-agent" title="注入系统提示词"><i
+                        class="fa-solid fa-wand-magic-sparkles"></i> 初始化</button>
+                <button id="btn-connect" data-action="connect-page" title="手动重连浏览器和页面"><i class="fa-solid fa-plug"></i>
+                    重连页面</button>
+                <button data-action="clear-chat"><i class="fa-solid fa-eraser"></i> 清空</button>
+            </div>
+            <div id="chat-list"></div>
+            <div class="chat-divider" id="chat-divider"></div>
+            <div class="chat-stats" id="chat-stats">
+                <span>发送 0</span><span class="stat-sep"></span>
+                <span>收到 0</span><span class="stat-sep"></span>
+                <span>总计 0</span><span class="stat-sep"></span>
+                <span>命令 0</span>
+            </div>
+        </div>
+        <!-- 动作记录已移至右侧栏面板 -->
+        <!-- 设置卡片 -->
+        <div class="card" id="settings-card">
+            <div class="card-header">
+                <span><i class="fa-solid fa-sliders"></i> 设置</span>
+                <button data-action="toggle-settings"><i class="fa-solid fa-xmark"></i> 关闭</button>
+            </div>
+            <div class="card-body">
+
+                <div class="settings-section">
+                    <div class="settings-section-title"><i class="fa-solid fa-globe"></i> Chrome 浏览器</div>
+                    <div class="settings-grid">
+                        <div class="full">
+                            <div class="setting-label">可执行文件</div>
+                            <div class="row-flex">
+                                <input type="text" id="cfg-chrome-exe" class="browse-input" placeholder="chrome.exe 完整路径">
+                                <button data-action="browse-file" data-target="cfg-chrome-exe"><i class="fa-solid fa-folder-open"></i> 浏览</button>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="setting-label">调试端口</div>
+                            <input type="number" id="cfg-chrome-port" placeholder="9222">
+                        </div>
+                        <div>
+                            <div class="setting-label">用户数据目录</div>
+                            <div class="row-flex">
+                                <input type="text" id="cfg-chrome-userdir" class="browse-input" placeholder="留空使用默认">
+                                <button data-action="browse-folder" data-target="cfg-chrome-userdir"><i class="fa-solid fa-folder-open"></i> 浏览</button>
+                            </div>
+                        </div>
+                        <div class="full">
+                            <div class="setting-label">启动选项</div>
+                            <label class="check-row"><input type="checkbox" id="cfg-chrome-newwin"> --new-window <span class="dim">新窗口启动</span></label>
+                            <label class="check-row"><input type="checkbox" id="cfg-chrome-nofirst"> --no-first-run <span class="dim">跳过首次运行向导</span></label>
+                            <label class="check-row"><input type="checkbox" id="cfg-chrome-headless"> --headless <span class="dim">无头模式（会导致模型输出获取失败）</span></label>
+                        </div>
+                        <div class="full">
+                            <div class="setting-label">额外启动参数 <span class="dim">追加到命令行末尾</span></div>
+                            <input type="text" id="cfg-chrome-extra" placeholder="例如: --disable-gpu --window-size=1280,720">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <div class="settings-section-title"><i class="fa-solid fa-robot"></i> DeepSeek</div>
+                    <div class="settings-grid">
+                        <div class="full">
+                            <div class="setting-label">页面地址</div>
+                            <input type="text" id="cfg-url" placeholder="https://chat.deepseek.com/">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <div class="settings-section-title"><i class="fa-solid fa-folder-tree"></i> 工作区</div>
+                    <div class="settings-grid">
+                        <div class="full">
+                            <div class="setting-label">工作目录 <span class="dim">动作执行与文件读写的根目录</span></div>
+                            <div class="row-flex">
+                                <input type="text" id="cfg-workdir" class="browse-input" placeholder="留空使用程序所在目录">
+                                <button data-action="browse-folder" data-target="cfg-workdir"><i class="fa-solid fa-folder-open"></i> 浏览</button>
+                                <button data-action="open-workdir" title="在资源管理器中打开" class="icon-btn"><i class="fa-solid fa-arrow-up-right-from-square"></i></button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <div class="settings-section-title"><i class="fa-solid fa-image"></i> 背景图片</div>
+                    <div class="settings-grid">
+                        <div class="full">
+                            <div class="setting-label">背景图片路径</div>
+                            <div class="row-flex">
+                                <input type="text" id="cfg-background" class="browse-input" placeholder="留空表示使用默认背景">
+                                <button data-action="browse-image" data-target="cfg-background"><i class="fa-solid fa-image"></i> 浏览</button>
+                                <button data-action="remove-background" title="移除背景" class="icon-btn"><i class="fa-solid fa-xmark"></i></button>
+                            </div>
+                            <div class="hint"><i class="fa-solid fa-info-circle"></i> 支持 PNG / JPG / WEBP，设置后立即生效</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <div class="settings-section-title"><i class="fa-solid fa-palette"></i> 外观</div>
+                    <div class="settings-grid">
+                        <div>
+                            <div class="setting-label">卡片模糊度 (px)</div>
+                            <input type="number" id="cfg-blur" min="0" max="48" step="1" placeholder="24">
+                        </div>
+                        <div>
+                            <div class="setting-label">文字大小 (%)</div>
+                            <input type="number" id="cfg-fontscale" min="50" max="200" step="5" placeholder="100">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <div class="settings-section-title"><i class="fa-solid fa-bolt"></i> 动作执行</div>
+                    <div class="settings-grid">
+                        <div>
+                            <div class="setting-label">最大动作轮次</div>
+                            <input type="number" id="cfg-maxrounds" placeholder="50">
+                        </div>
+                        <div>
+                            <div class="setting-label">生成超时 (秒)</div>
+                            <input type="number" id="cfg-timeout" placeholder="120">
+                        </div>
+                        <div>
+                            <div class="setting-label">Shell 超时 (秒)</div>
+                            <input type="number" id="cfg-shelltimeout" placeholder="30">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <div class="settings-section-title"><i class="fa-solid fa-eye"></i> 资源管理器监测</div>
+                    <div class="settings-grid">
+                        <div class="full">
+                            <label class="check-row"><input type="checkbox" id="cfg-watch-explorer"> 监测已打开的资源管理器窗口 <span class="dim">自动提示切换工作区</span></label>
+                        </div>
+                        <div>
+                            <div class="setting-label">监测间隔 (秒)</div>
+                            <input type="number" id="cfg-watch-interval" min="1" max="60" step="1" placeholder="2">
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+            <div class="settings-footer">
+                <button class="btn-reset" data-action="reset-settings"><i class="fa-solid fa-rotate-left"></i> 恢复默认</button>
+                <button class="btn-save" data-action="save-settings"><i class="fa-solid fa-check"></i> 保存设置</button>
+            </div>
+        </div>
+        <!-- 输入卡片 (无标题) -->
+        <div class="card input-card">
+            <div id="input-row">
+                <textarea id="input" placeholder="输入消息..." rows="1" autofocus></textarea>
+                <button id="send-btn" title="发送" data-action="send"><i class="fa-solid fa-paper-plane"></i></button>
+            </div>
+        </div>
+            </div>
+            <div id="splitter" title="拖动调整宽度"></div>
+            <div id="right-col">
+                <div class="side-panel" id="panel-files">
+                    <div class="side-panel-head" data-action="panel-toggle" data-panel="files">
+                        <span class="sp-title"><i class="fa-solid fa-folder-tree"></i> 资源管理器</span>
+                        <span class="sp-actions">
+                            <button data-action="fs-refresh" title="刷新"><i class="fa-solid fa-rotate"></i></button>
+                            <button data-action="fs-open-here" title="在资源管理器中打开"><i class="fa-solid fa-folder-open"></i></button>
+                            <i class="fa-solid fa-chevron-down sp-arrow"></i>
+                        </span>
+                    </div>
+                    <div class="side-panel-body">
+                        <div class="fs-path" id="fs-path"></div>
+                        <div class="fs-list" id="fs-list"></div>
+                    </div>
+                </div>
+                <div class="side-panel collapsed" id="panel-history">
+                    <div class="side-panel-head" data-action="panel-toggle" data-panel="history">
+                        <span class="sp-title"><i class="fa-solid fa-clock-rotate-left"></i> 技能记录 (<span id="history-count">0</span>)</span>
+                        <span class="sp-actions">
+                            <button data-action="clear-history" title="清空记录"><i class="fa-solid fa-trash-can"></i></button>
+                            <i class="fa-solid fa-chevron-down sp-arrow"></i>
+                        </span>
+                    </div>
+                    <div class="side-panel-body">
+                        <div class="fs-list" id="side-history-list"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div id="toast" class="toast"></div>
+    <!-- 自定义模态弹窗 -->
+    <div id="modal-overlay" class="modal-overlay">
+        <div class="modal-dialog">
+            <div class="modal-icon"><i class="fa-solid fa-triangle-exclamation"></i></div>
+            <div class="modal-title" id="modal-title">尚未注入系统提示词</div>
+            <div class="modal-body" id="modal-body">
+                AI 回复<strong>可能不包含角色设定</strong>和<strong>可执行动作</strong>。<br>建议先点击对话栏中的 <strong>"初始化"</strong> 按钮。
+            </div>
+            <div class="modal-btns">
+                <button class="modal-btn-cancel" data-action="hide-modal">取消</button>
+                <button class="modal-btn-confirm" id="modal-btn-confirm" data-action="modal-confirm">仍然发送(Enter)</button>
+            </div>
+        </div>
+    </div>
+    <!-- 工作区切换提示条 -->
+    <div id="workdir-bar" class="workdir-bar">
+        <span class="wd-text"><i class="fa-solid fa-folder-open"></i> 检测到资源管理器打开了 <b id="wd-path"></b>，切换工作区？</span>
+        <span class="wd-btns">
+            <button class="wd-ok" data-action="workdir-accept">切换</button>
+            <button class="wd-cancel" data-action="workdir-reject">不用了</button>
+        </span>
+    </div>
+    <!-- 文件预览层 -->
+    <div id="file-viewer" class="file-viewer">
+        <div class="fv-head">
+            <span class="fv-name" id="fv-name"></span>
+            <span class="fv-actions">
+                <button data-action="fv-open" title="在资源管理器中定位"><i class="fa-solid fa-arrow-up-right-from-square"></i></button>
+                <button data-action="fv-close" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+            </span>
+        </div>
+        <pre class="fv-code"><code id="fv-code"></code></pre>
+    </div>
+    <script src="js/app.js"></script>
+</body>
+
+</html>
