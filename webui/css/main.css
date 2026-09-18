@@ -162,6 +162,12 @@
             animation: pulse 1s infinite;
         }
 
+        .dot.error {
+            background: var(--color-red);
+            box-shadow: 0 0 8px var(--color-red);
+            animation: pulse 1.5s infinite;
+        }
+
         @keyframes pulse {
             0% {
                 transform: scale(0.95);
@@ -461,6 +467,8 @@
             color: var(--text-regular);
             align-self: flex-start;
             border-bottom-left-radius: 6px;
+            max-width: 100%;       /* AI 输出占满整行宽度，长表格/代码更舒展 */
+            width: 100%;
         }
 
         .msg.assistant p {
@@ -490,6 +498,107 @@
             font-size: calc(12px * var(--fs));
         }
 
+        /* ====== AI 消息内 markdown 元素排版 ======
+           全局 * reset 清零了 ul/ol 的 padding-left，导致列表符号溢出到盒子外侧被裁剪；
+           同时标题/引用/表格/hr 都无样式。这里统一补回。 */
+        .msg.assistant h1,
+        .msg.assistant h2,
+        .msg.assistant h3,
+        .msg.assistant h4,
+        .msg.assistant h5,
+        .msg.assistant h6 {
+            margin: 10px 0 6px;
+            line-height: 1.3;
+            font-weight: 600;
+            color: var(--text-main);
+        }
+
+        .msg.assistant h1 { font-size: calc(18px * var(--fs)); }
+        .msg.assistant h2 { font-size: calc(16px * var(--fs)); }
+        .msg.assistant h3 { font-size: calc(15px * var(--fs)); }
+        .msg.assistant h4,
+        .msg.assistant h5,
+        .msg.assistant h6 { font-size: calc(14px * var(--fs)); }
+
+        .msg.assistant h1:first-child,
+        .msg.assistant h2:first-child,
+        .msg.assistant h3:first-child { margin-top: 0; }
+
+        .msg.assistant ul,
+        .msg.assistant ol {
+            padding-left: 1.6em;   /* 给列表符号留出缩进，避免被左侧裁剪 */
+            margin: 6px 0;
+        }
+
+        .msg.assistant li {
+            margin: 2px 0;
+        }
+
+        .msg.assistant li::marker {
+            color: var(--text-muted);
+        }
+
+        .msg.assistant blockquote {
+            border-left: 3px solid rgba(129, 140, 248, 0.45);
+            padding: 2px 0 2px 12px;
+            margin: 8px 0;
+            color: var(--text-muted);
+        }
+
+        .msg.assistant a {
+            color: var(--color-blue-alt);
+            text-decoration: underline;
+            text-underline-offset: 2px;
+        }
+
+        .msg.assistant hr {
+            border: none;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            margin: 12px 0;
+        }
+
+        /* 表格：外层容器负责横向滚动，内层 table 按内容宽度 */
+        .msg.assistant .table-wrap {
+            overflow-x: auto;
+            margin: 8px 0;
+            max-width: 100%;
+            border-radius: 8px;
+        }
+
+        .msg.assistant table {
+            border-collapse: collapse;
+            width: max-content;
+            min-width: 100%;
+            font-size: calc(12.5px * var(--fs));
+        }
+
+        .msg.assistant th,
+        .msg.assistant td {
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            padding: 6px 12px;
+            text-align: left;
+            white-space: nowrap;
+            vertical-align: top;
+        }
+
+        .msg.assistant th {
+            background: rgba(255, 255, 255, 0.06);
+            font-weight: 600;
+            color: var(--text-main);
+        }
+
+        .msg.assistant tbody tr:nth-child(even) {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .msg.assistant tbody tr:hover {
+            background: rgba(129, 140, 248, 0.06);
+        }
+
+        .msg.assistant img {
+            max-width: 100%;
+            border-radius: 6px;
+        }
         /* ====== 动作卡片 — 宽度自适应 ====== */
         .action-card {
             background: rgba(255, 255, 255, 0.015);

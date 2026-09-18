@@ -166,6 +166,17 @@
                             <div class="setting-label">页面地址</div>
                             <input type="text" id="cfg-url" placeholder="https://chat.deepseek.com/">
                         </div>
+                        <div>
+                            <div class="setting-label">消息间隔下限 (秒) <span class="dim">0 = 不限速</span></div>
+                            <input type="number" id="cfg-min-interval" min="0" max="600" step="1" placeholder="15">
+                        </div>
+                        <div>
+                            <div class="setting-label">退避上限 (秒)</div>
+                            <input type="number" id="cfg-max-interval" min="0" max="3600" step="1" placeholder="120">
+                        </div>
+                        <div class="full">
+                            <div class="hint"><i class="fa-solid fa-info-circle"></i> 动态限速：正常时按「下限」发送并逐步收敛；遇到超时/失败自动翻倍退避，最高不超过「退避上限」，稳定后自动回落。0 表示不限速。</div>
+                        </div>
                     </div>
                 </div>
 

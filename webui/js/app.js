@@ -1,5 +1,37 @@
         // ====== 初始化 marked ======
-        try { marked.setOptions({ breaks: true, gfm: true }); } catch (e) { }
+        // breaks:false —— 单个回车不再强转 <br>（避免 AI 输出里行内换行被撑开）；段落靠空行分隔
+        try { marked.setOptions({ breaks: false, gfm: true }); } catch (e) { }
+        // ====== 依赖自愈：vendor 脚本若因瞬时连接问题没加载上，自动重试 ======
+        // 背景：pywebview 内置 http 服务器并发拉取多个资源时偶发 ERR_CONNECTION_REFUSED，
+        // 导致 marked / DOMPurify 缺失、markdown 退化成未渲染原文。这里带 cache-buster 重试，
+        // 彻底失败时明确提示，而不是静默降级。
+        (function ensureVendorLibs() {
+            var libs = [
+                { name: 'marked', test: function () { return !!window.marked; }, src: 'vendor/js/marked.min.js' },
+                { name: 'DOMPurify', test: function () { return !!window.DOMPurify; }, src: 'vendor/js/purify.min.js' },
+                { name: 'hljs', test: function () { return !!window.hljs; }, src: 'vendor/js/highlight.min.js' }
+            ];
+            var round = 0, MAX = 8;
+            function missing() { return libs.filter(function (l) { return !l.test(); }); }
+            (function attempt() {
+                var miss = missing();
+                if (!miss.length) return;
+                if (round >= MAX) {
+                    var msg = '渲染库加载失败(' + miss.map(function (l) { return l.name; }).join(',') + ')，请重启程序';
+                    try { if (window.showToast) window.showToast(msg); } catch (e) { }
+                    try { console.error('[DeepHelp] ' + msg); } catch (e) { }
+                    return;
+                }
+                round++;
+                miss.forEach(function (l) {
+                    var s = document.createElement('script');
+                    s.src = l.src + '?_r=' + round + '_' + Date.now();
+                    s.async = false;
+                    document.head.appendChild(s);
+                });
+                setTimeout(attempt, 400);
+            })();
+        })();
         // ====== 全局状态 ======
         var chatEl = document.getElementById('chat-list');
         var inputEl = document.getElementById('input');
@@ -76,35 +108,44 @@
         function setStatus(obj) {
             var dot = document.getElementById('sb-dot');
             var st = document.getElementById('sb-status');
-            dot.className = 'dot';
-            if (obj.connected === true) {
-                dot.classList.add('on');
-                st.textContent = '已连接';
-            } else if (obj.connected === false) {
-                dot.classList.add('off');
-                st.textContent = '未连接';
-            } else {
-                dot.classList.add('connecting');
-                st.textContent = '连接中...';
+            // 兼容旧字段：state 缺失时按 connected 推断
+            var state = obj.state;
+            if (!state) {
+                state = obj.connected === true ? 'connected'
+                    : obj.connected === false ? 'disconnected' : 'connecting';
             }
+            var label = { connected: '已连接', connecting: '连接中...',
+                          error: '连接错误', disconnected: '未连接' }[state] || state;
+            // 有进度文案（如"限速等待 3s..."）时优先显示
+            st.textContent = obj.msg ? obj.msg : label;
+            dot.className = 'dot ' + (state === 'connected' ? 'on'
+                : state === 'connecting' ? 'connecting'
+                : state === 'error' ? 'error' : 'off');
             document.getElementById('sb-port').textContent = '端口: ' + (obj.port || '--');
-            document.getElementById('sb-page').textContent = '页面: ' + (obj.page_url || '--');
+            var pg = document.getElementById('sb-page');
+            var url = obj.page_url || '';
+            pg.textContent = '页面: ' + (url ? url.replace(/^https?:\/\//, '').slice(0, 40) : '--');
+            pg.title = url;
             var cwdEl = document.getElementById('sb-cwd');
             cwdEl.textContent = 'CWD: ' + (obj.cwd || '--');
             cwdEl.title = obj.cwd_full || '';
         }
         // ====== 消息 ======
         function applyFadeInChildren(el) {
-            const children = Array.from(el.children);
-            children.forEach((child, idx) => {
-                child.style.opacity = "0";
+            var children = Array.from(el.children);
+            children.forEach(function (child, idx) {
+                // 先置 0 并挂过渡
                 child.style.transition = "opacity 0.35s ease";
-                // 错开一点时间，形成依次浮现
-                setTimeout(() => {
-                    requestAnimationFrame(() => {
-                        child.style.opacity = "1";
-                    });
-                }, idx * 60);
+                child.style.opacity = "0";
+                // 用 setTimeout 错开呈现，绝不依赖 requestAnimationFrame：
+                // WebView2 在窗口后台/最小化/被遮挡时会暂停 rAF 回调，
+                // 若把 opacity:1 放在 rAF 里，内容会永远停在透明状态——
+                // 表现为"DOM 里明明有内容却看不见"，切回前台才出现（时好时坏的假死）。
+                setTimeout(function () {
+                    // 强制重排：确保 0→1 的样式变化被浏览器观察到，过渡才会触发
+                    void child.offsetHeight;
+                    child.style.opacity = "1";
+                }, 20 + idx * 60);
             });
         }
 
@@ -169,6 +210,20 @@
                 html = html.replace(/@@QUIZ_(\d+)@@/g, inject);
             }
             return html;
+        }
+        // 把消息内的每个 <table> 包进 .table-wrap，实现横向滚动（CSS 无法直接给裸 table 加滚动）
+        function wrapTables(container) {
+            if (!container || !container.querySelectorAll) return;
+            var tables = container.querySelectorAll('table');
+            for (var i = 0; i < tables.length; i++) {
+                var t = tables[i];
+                if (t.parentNode && t.parentNode.classList &&
+                    t.parentNode.classList.contains('table-wrap')) continue;
+                var wrap = document.createElement('div');
+                wrap.className = 'table-wrap';
+                t.parentNode.insertBefore(wrap, t);
+                wrap.appendChild(t);
+            }
         }
         function collectQuizAnswers(group) {
             var items = group.querySelectorAll('.quiz-item');
@@ -263,8 +318,8 @@
                     : esc(text);
                 if (virtualMessageDiv != null && randCharType != null) {
                     clearInterval(randCharType);
-                    randCharType = null;
                     virtualMessageDiv.innerHTML = html;
+                    wrapTables(virtualMessageDiv);
                     // 新增：给markdown生成的子节点施加渐显
                     applyFadeInChildren(virtualMessageDiv);
                     virtualMessageDiv = null;
@@ -273,6 +328,7 @@
                     var div = document.createElement('div');
                     div.className = 'msg ' + role;
                     div.innerHTML = html;
+                    wrapTables(div);
                     chatEl.appendChild(div);
                     applyFadeInChildren(div);
                     scrollBottom(chatEl);
@@ -303,9 +359,11 @@
                 span.style.opacity = "0";
                 span.style.transition = "opacity 0.35s ease";
                 div.appendChild(span);
-                requestAnimationFrame(() => {
+                // 同 applyFadeInChildren：不用 rAF，避免窗口后台时字符永远透明
+                setTimeout(function () {
+                    void span.offsetHeight;
                     span.style.opacity = "1";
-                });
+                }, 20);
                 scrollBottom(chatEl);
             }, 50);
             virtualMessageDiv = div;
@@ -568,6 +626,13 @@
             document.getElementById('cfg-chrome-headless').checked = !!c.headless;
             document.getElementById('cfg-chrome-extra').value = c.extra_args || '';
             document.getElementById('cfg-url').value = cfg.deepseek_url || '';
+            // 动态限速：下限 + 退避上限（秒）
+            var msi = cfg.min_send_interval;
+            if (msi === undefined || msi === null) msi = 15;
+            document.getElementById('cfg-min-interval').value = msi;
+            var mxi = cfg.max_send_interval;
+            if (mxi === undefined || mxi === null) mxi = 120;
+            document.getElementById('cfg-max-interval').value = mxi;
             document.getElementById('cfg-maxrounds').value = cfg.max_action_rounds || 50;
             document.getElementById('cfg-timeout').value = cfg.action_timeout || 120;
             document.getElementById('cfg-shelltimeout').value = cfg.shell_timeout || 30;
@@ -604,6 +669,8 @@
                     extra_args: document.getElementById('cfg-chrome-extra').value.trim()
                 },
                 deepseek_url: document.getElementById('cfg-url').value.trim(),
+                min_send_interval: parseInt(document.getElementById('cfg-min-interval').value) || 0,
+                max_send_interval: parseInt(document.getElementById('cfg-max-interval').value) || 120,
                 max_action_rounds: parseInt(document.getElementById('cfg-maxrounds').value) || 50,
                 action_timeout: parseInt(document.getElementById('cfg-timeout').value) || 120,
                 shell_timeout: parseInt(document.getElementById('cfg-shelltimeout').value) || 30,

@@ -26,3 +26,5 @@ config.local.json
 .idea/
 *.swp
 .DS_Store
+# AI 运行时生成（含本机人设/经验笔记与本地路径）
+prompt.json

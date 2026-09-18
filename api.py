@@ -38,6 +38,8 @@ class Api:
         self._maximized = False
         self._busy = False
         self._initialized = False
+        self._status_state = "disconnected"   # connecting / connected / error / disconnected
+        self._status_msg = ""                 # 覆盖显示的文案（空则用状态默认文案）
         self._task_queue = queue.Queue()
         self._worker = threading.Thread(target=self._worker_loop, daemon=True)
         self._worker.start()
@@ -124,21 +126,37 @@ class Api:
                 json.dump(self._config, f, ensure_ascii=False, indent=2)
         except Exception:
             pass
-
-    # ── 状态更新辅助 ──
-    def _make_status(self, connected, msg=""):
+    def _make_status(self):
+        """组装完整状态对象。state 决定指示灯与默认文案，msg 为可选的覆盖文案，
+        page_url 取自 agent 当前页面。"""
+        page_url = ""
+        try:
+            if self._agent is not None:
+                page_url = self._agent.page_url
+        except Exception:
+            page_url = ""
         return json.dumps(
             {
-                "connected": connected,
+                "state": self._status_state,
+                "msg": self._status_msg,
                 "port": self._config["chrome"]["port"],
-                "page_url": msg,
+                "page_url": page_url,
                 "cwd": os.path.basename(self._config.get("work_dir", WORK_DIR)),
                 "cwd_full": self._config.get("work_dir", WORK_DIR),
             }
         )
 
-    def _set_status(self, connected, msg=""):
-        self._js("setStatus(" + self._make_status(connected, msg) + ")")
+    def _set_status(self, state=None, msg=None):
+        """更新连接状态并推送到前端。
+        state 为 None 时保持当前状态，仅更新 msg（用于进度提示，如"限速等待"）；
+        切换 state 且未显式给 msg 时，自动清掉进度覆盖文案。"""
+        if state is not None:
+            self._status_state = state
+            if msg is None:
+                self._status_msg = ""
+        if msg is not None:
+            self._status_msg = msg
+        self._js("setStatus(" + self._make_status() + ")")
 
     # ── 窗口控制 ──
     def minimize_window(self):
@@ -272,18 +290,18 @@ class Api:
             self._agent = None
             time.sleep(0.5)
         try:
-            self._set_status(None, "连接中...")
-            self._agent = DeepSeekAgent(self._config)
-            self._agent.reconnect(on_status=lambda msg: self._set_status(None, msg))
-            self._initialized = False
-            self._set_status(None, "正在加载 DeepSeek...")
-            self._set_status(
-                True, self._config["deepseek_url"].split("/")[-2] or "deepseek"
+            self._set_status("connecting", "连接中...")
+            self._agent = DeepSeekAgent(
+                self._config, on_status=lambda msg: self._set_status(msg=msg)
             )
+            self._agent.reconnect(on_status=lambda msg: self._set_status(msg=msg))
+            self._initialized = False
+            self._set_status("connecting", "正在加载 DeepSeek...")
+            self._set_status("connected")
             self._js('showToast("已连接到 Chrome")')
         except Exception as e:
             self._agent = None
-            self._set_status(False)
+            self._set_status("error", str(e))
             self._js(f"showToast('{action_name}失败: {e}')")
 
     # ── 重连 ──
@@ -312,6 +330,8 @@ class Api:
             self._js(f"showToast('初始化失败: {e}')")
         finally:
             self._js("setBusy(false)")
+            if self._agent is not None and self._agent.is_connected:
+                self._set_status("connected")
 
     def send_message(self, text):
         if self._busy:
@@ -323,14 +343,14 @@ class Api:
         try:
             self._js("setBusy(true)")
             if self._agent is None or not self._agent.is_connected:
-                self._set_status(None, "连接中...")
-                self._agent = DeepSeekAgent(self._config)
-                self._agent.reconnect(on_status=lambda msg: self._set_status(None, msg))
-                self._initialized = False
-                self._set_status(None, "正在加载 DeepSeek...")
-                self._set_status(
-                    True, self._config["deepseek_url"].split("/")[-2] or "deepseek"
+                self._set_status("connecting", "连接中...")
+                self._agent = DeepSeekAgent(
+                    self._config, on_status=lambda msg: self._set_status(msg=msg)
                 )
+                self._agent.reconnect(on_status=lambda msg: self._set_status(msg=msg))
+                self._initialized = False
+                self._set_status("connecting", "正在加载 DeepSeek...")
+                self._set_status("connected")
             prompt = f"User:\n{user_text}"
             reply = self._agent.send(prompt)
             for _ in range(self._config["max_action_rounds"]):
@@ -378,11 +398,16 @@ class Api:
                     pass
                 self._agent = None
             self._initialized = False
-            self._set_status(False)
+            self._set_status("error")
             self._js("setAgentInitialized(false)")
         finally:
             self._busy = False
             self._js("setBusy(false)")
+            # 一轮结束：刷新状态栏，清掉"限速等待"等进度文案，同步最新 page_url
+            if self._agent is not None and self._agent.is_connected:
+                self._set_status("connected")
+            else:
+                self._set_status("disconnected")
 
     # ── 设置 ──
 
@@ -411,7 +436,7 @@ class Api:
         except Exception:
             pass
         # 刷新状态栏（工作区可能变化）
-        self._set_status(True, "")
+        self._set_status("connected")
 
     def reset_settings(self):
         self._reset_config()
@@ -520,7 +545,7 @@ class Api:
             return {"ok": False, "error": "目录不存在: " + target}
         self._config["work_dir"] = target
         self._save_config()
-        self._set_status(True, "")
+        self._set_status("connected")
         return {"ok": True, "path": target}
 
     def get_work_dir(self):

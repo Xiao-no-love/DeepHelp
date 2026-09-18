@@ -41,6 +41,8 @@ DEFAULT_CONFIG = {
     "max_action_rounds": 50,
     "action_timeout": 120,
     "shell_timeout": 30,
+    "min_send_interval": 15,
+    "max_send_interval": 120,
     "background_image": "",
     "work_dir": WORK_DIR,
 

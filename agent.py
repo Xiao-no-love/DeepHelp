@@ -6,6 +6,7 @@ DeepHelp — DeepSeek 浏览器代理
 import os
 import socket
 import time
+import random
 import threading
 import subprocess
 from playwright.sync_api import sync_playwright
@@ -76,13 +77,17 @@ def ensure_chrome_running(cfg, on_status=None):
 class DeepSeekAgent:
     """DeepSeek 网页版对话代理"""
 
-    def __init__(self, config):
+    def __init__(self, config, on_status=None):
         self._cfg = config
+        self._on_status = on_status
         self._playwright = None
         self._browser = None
         self._page = None
         self._send_btn = None
         self._textarea = None
+        self._next_send_at = 0.0  # 下次允许发送的最早时刻（限速用）
+        self._cur_iv = None        # 当前生效间隔（AIMD 动态调整）
+        self._ok_streak = 0        # 连续正常返回计数
         agent_cfg = config.get("agent") or {}
         self._sel = deep_merge(
             DEFAULT_CONFIG["agent"]["selectors"], agent_cfg.get("selectors", {})
@@ -93,6 +98,74 @@ class DeepSeekAgent:
         self._send_svg = agent_cfg.get("send_svg", SEND_SVG)
         self._copy_svg = agent_cfg.get("copy_svg", COPY_SVG)
 
+    def _report(self, msg):
+        if self._on_status:
+            self._on_status(msg)
+
+    # ── 发送限速：固定基线 + AIMD 动态退避 + 抖动 ──
+    # min_send_interval 为基准下限，max_send_interval 为退避上限。
+    # 正常返回时逐步收敛回基准；异常（超时/发送失败/取回复失败）时翻倍退避。
+    def _base_interval(self):
+        """基准间隔（秒），0 表示不限速。实时读取，改设置即时生效"""
+        try:
+            return max(0.0, float(self._cfg.get("min_send_interval") or 0))
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _max_interval(self):
+        """退避上限（秒），不小于基准"""
+        base = self._base_interval()
+        try:
+            cap = float(self._cfg.get("max_send_interval") or 120)
+        except (TypeError, ValueError):
+            cap = 120.0
+        return max(base, cap)
+
+    def _cur_interval(self):
+        """当前生效间隔，夹在 [base, cap] 之间"""
+        base = self._base_interval()
+        if self._cur_iv is None or self._cur_iv < base:
+            self._cur_iv = base
+        elif self._cur_iv > self._max_interval():
+            self._cur_iv = self._max_interval()
+        return self._cur_iv
+
+    def _on_send_ok(self):
+        """一次正常返回：连续 3 次成功后，间隔按 0.9 缓慢收敛回基准"""
+        if self._base_interval() <= 0:
+            self._cur_iv = 0.0
+            return
+        self._ok_streak += 1
+        if self._ok_streak >= 3:
+            self._ok_streak = 0
+            self._cur_iv = max(self._base_interval(), self._cur_interval() * 0.9)
+
+    def _on_send_fail(self):
+        """一次异常：间隔翻倍急退避（不超过上限）"""
+        if self._base_interval() <= 0:
+            return
+        self._ok_streak = 0
+        self._cur_iv = min(self._max_interval(),
+                           max(self._base_interval(), self._cur_interval() * 2))
+
+    def _cooldown_now(self):
+        """把"可再次发送"的时刻推到 当前间隔（含 ±10% 抖动）之后"""
+        iv = self._cur_interval()
+        if iv <= 0:
+            self._next_send_at = 0.0
+            return
+        jitter = iv * random.uniform(-0.1, 0.1)
+        self._next_send_at = time.time() + max(0.0, iv + jitter)
+
+    def _wait_cooldown(self):
+        """限速等待：距上次回复返回不足当前间隔则阻塞。
+        所有发送（用户消息 / 系统提示注入 / 动作回传）都走 send()，因此一并受限。"""
+        while True:
+            remain = self._next_send_at - time.time()
+            if remain <= 0:
+                return
+            self._report(f"限速等待 {int(remain) + 1}s...")
+            time.sleep(min(1.0, remain))
 
     def _connect_cdp(self, on_status=None):
         """连接 Chrome 实例（仅 CDP，不处理页面）"""
@@ -301,6 +374,22 @@ class DeepSeekAgent:
         兼容无头模式，不依赖系统剪贴板、不依赖pyperclip
         复用网页原生复制逻辑输出，和手动复制效果完全一致
         """
+        # 限速：距上次回复返回不足当前间隔则先等待
+        self._wait_cooldown()
+        try:
+            result = self._send_once(prompt)
+        except Exception:
+            # 异常即急退避，并把冷却推到退避后的间隔
+            self._on_send_fail()
+            self._cooldown_now()
+            raise
+        # 正常返回即缓降，再从"回复返回"这一刻起重新计时
+        self._on_send_ok()
+        self._cooldown_now()
+        return result
+
+    def _send_once(self, prompt):
+        """真正的一轮发送 + 等待生成 + 取回文本（不含限速包装）"""
         timeout_ms = self._cfg["action_timeout"] * 1000
 
         textarea = self._textarea
@@ -328,17 +417,14 @@ class DeepSeekAgent:
         }
         """)
 
-
         # 清空输入框，写入prompt
         textarea.fill("")
         textarea.fill(prompt)
 
         # 等待发送按钮变为可发送状态
-
         for _ in range(self._tmg["sendable_retries"]):
             if self._is_sendable():
                 break
-
             time.sleep(self._tmg["sendable_interval"])
         else:
             raise RuntimeError("发送按钮长时间不可用，无法发送请求")
@@ -346,12 +432,13 @@ class DeepSeekAgent:
         # 使用回车发送消息
         textarea.press("Enter")
 
-        # 等待进入生成中状态
+        # 兜底计时：消息已真的发出，即便后续等待/取回复失败，也要占住这一轮
+        self._cooldown_now()
 
+        # 等待进入生成中状态
         for _ in range(self._tmg["generating_retries"]):
             if self._is_generating():
                 break
-
             time.sleep(self._tmg["generating_interval"])
         else:
             raise RuntimeError("发送后未检测到AI进入生成状态")
@@ -361,9 +448,7 @@ class DeepSeekAgent:
         while self._is_generating():
             if (time.time() - start_time) * 1000 > timeout_ms:
                 raise TimeoutError(f"AI回复超时，设置超时 {timeout_ms}ms")
-
             time.sleep(self._tmg["generating_poll"])
-
 
         # 定位最后一条消息的复制按钮（按复制图标 SVG path 精确匹配，避免 nth 玄学）
         copy_btn = self._locate_copy_button()
@@ -378,14 +463,11 @@ class DeepSeekAgent:
         poll_start = time.time()
         result = None
         while True:
-            # ✅修复：立即执行函数包裹，禁止顶层return语法
             result = self._page.evaluate("(()=>{return window.__captured_copy_text;})()")
             if result is not None:
                 break
-
             if time.time() - poll_start > self._tmg["copy_poll_timeout"]:
                 raise RuntimeError("触发复制后未能捕获到文本内容，请检查复制按钮定位")
-
             time.sleep(self._tmg["copy_poll_interval"])
 
         return result
@@ -410,5 +492,15 @@ class DeepSeekAgent:
 
     @property
     def is_connected(self):
-        """是否已连接"""
-        return self._playwright is not None and self._browser is not None
+        """是否已连接（浏览器已连且页面已就绪）"""
+        return self._playwright is not None and self._browser is not None and self._page is not None
+
+    @property
+    def page_url(self):
+        """当前操作页面的 URL（未就绪返回空串）"""
+        try:
+            if self._page:
+                return self._page.url or ""
+        except Exception:
+            pass
+        return ""
