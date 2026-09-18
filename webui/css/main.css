@@ -198,6 +198,64 @@
             min-width: 8px;
         }
 
+        /* 自动模式徽章 */
+        .auto-badge {
+            display: none;
+            align-items: center;
+            gap: 2px;
+            padding: 2px 4px 2px 8px;
+            border-radius: 999px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            background: rgba(255, 255, 255, 0.03);
+            margin-right: 8px;
+            flex-shrink: 0;
+        }
+        .auto-badge.on {
+            display: inline-flex;
+            border-color: rgba(34, 211, 238, 0.5);
+            background: rgba(34, 211, 238, 0.12);
+            box-shadow: 0 0 10px rgba(34, 211, 238, 0.25);
+            animation: autopulse 1.6s infinite;
+        }
+        @keyframes autopulse {
+            0%, 100% { box-shadow: 0 0 8px rgba(34, 211, 238, 0.2); }
+            50% { box-shadow: 0 0 14px rgba(34, 211, 238, 0.5); }
+        }
+        .auto-label {
+            color: #22d3ee;
+            cursor: pointer;
+            font-weight: 500;
+        }
+        .auto-round {
+            color: var(--text-muted);
+            font-size: calc(10px * var(--fs));
+            min-width: 22px;
+            text-align: center;
+        }
+        .auto-badge button {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding: 2px 5px;
+            border-radius: 6px;
+            font-size: calc(10px * var(--fs));
+        }
+        .auto-badge button:hover {
+            color: var(--text-main);
+            background: rgba(255, 255, 255, 0.08);
+        }
+        /* 排队中的用户消息标记 */
+        .queued-tag {
+            display: inline-block;
+            margin-left: 8px;
+            padding: 0 6px;
+            border-radius: 6px;
+            font-size: calc(10px * var(--fs));
+            color: var(--color-yellow);
+            border: 1px solid rgba(251, 191, 36, 0.3);
+        }
+
         #status-bar button {
             background: rgba(255, 255, 255, 0.05);
             border: 1px solid rgba(255, 255, 255, 0.1);

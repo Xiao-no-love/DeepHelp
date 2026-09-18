@@ -40,6 +40,9 @@ class Api:
         self._initialized = False
         self._status_state = "disconnected"   # connecting / connected / error / disconnected
         self._status_msg = ""                 # 覆盖显示的文案（空则用状态默认文案）
+        self._pending = []                    # 忙时排队的用户消息，下一轮带出
+        self._auto_mode = False               # 自动模式开关
+        self._auto_round = 0                  # 自动续接已用轮数
         self._task_queue = queue.Queue()
         self._worker = threading.Thread(target=self._worker_loop, daemon=True)
         self._worker.start()
@@ -143,9 +146,11 @@ class Api:
                 "page_url": page_url,
                 "cwd": os.path.basename(self._config.get("work_dir", WORK_DIR)),
                 "cwd_full": self._config.get("work_dir", WORK_DIR),
+                "auto_mode": self._auto_mode,
+                "auto_round": self._auto_round,
+                "auto_max": self._auto_max_rounds(),
             }
         )
-
     def _set_status(self, state=None, msg=None):
         """更新连接状态并推送到前端。
         state 为 None 时保持当前状态，仅更新 msg（用于进度提示，如"限速等待"）；
@@ -333,11 +338,67 @@ class Api:
             if self._agent is not None and self._agent.is_connected:
                 self._set_status("connected")
 
+    # ── 消息构造：统一用块标记，一条消息可含多块 ──
+    @staticmethod
+    def _build_message(blocks):
+        """blocks: [(标题, 内容), ...]，拼成多块消息。标题如 用户消息/工具输出/系统提示。"""
+        parts = []
+        for title, body in blocks:
+            if body is None or str(body).strip() == "":
+                continue
+            parts.append("[" + title + "]\n" + str(body).rstrip())
+        return "\n\n".join(parts)
+
+    def _drain_pending(self):
+        """取出并清空排队消息，返回合并后的 [用户消息] 块文本（无则 None）"""
+        if not self._pending:
+            return None
+        msgs = self._pending
+        self._pending = []
+        self._js("clearQueuedBadge()")
+        return self._build_message([("用户消息", "\n\n".join(msgs))])
+
     def send_message(self, text):
+        """任何时刻都接受消息：空闲则立即执行；忙则入队，等下一轮带出。"""
+        if not text or not text.strip():
+            return
         if self._busy:
+            self._pending.append(text)
+            self._js("markQueued(" + json.dumps(text, ensure_ascii=False) + ")")
             return
         self._busy = True
         self._post(lambda: self._run_agent(text))
+
+    # ── 自动模式控制（供 AI 的 auto_mode action / 前端按钮调用）──
+    def _auto_max_rounds(self):
+        try:
+            return max(1, int(self._config.get("auto_max_rounds") or 5))
+        except (TypeError, ValueError):
+            return 5
+
+    def _set_auto_mode(self, on):
+        self._auto_mode = bool(on)
+        if not self._auto_mode:
+            self._auto_round = 0
+        self._js("setAutoMode(" + json.dumps({"on": self._auto_mode,
+                                              "round": self._auto_round,
+                                              "max": self._auto_max_rounds()}) + ")")
+
+    def set_auto_mode_ui(self, on):
+        """前端按钮调用：手动开/关自动模式"""
+        self._set_auto_mode(on)
+        self._js('showToast("自动模式已' + ("开启" if on else "关闭") + '")')
+
+    def pause_auto_mode(self):
+        """前端按钮：手动暂停自动模式（不打断当前任务）"""
+        self._set_auto_mode(False)
+        self._js('showToast("自动模式已暂停")')
+
+    def reset_auto_round(self):
+        """前端按钮：轮数清零（自动模式保持，不打断任务）"""
+        self._auto_round = 0
+        self._set_auto_mode(self._auto_mode)
+        self._js('showToast("自动轮数已清零")')
 
     def _run_agent(self, user_text):
         try:
@@ -351,42 +412,88 @@ class Api:
                 self._initialized = False
                 self._set_status("connecting", "正在加载 DeepSeek...")
                 self._set_status("connected")
-            prompt = f"User:\n{user_text}"
-            reply = self._agent.send(prompt)
-            for _ in range(self._config["max_action_rounds"]):
-                actions = parse_actions(reply)
-                if not actions:
-                    break
-                clean = strip_actions(reply)
-                if clean:
-                    self._js(
-                        f"addMessage('assistant', {json.dumps(clean, ensure_ascii=False)})"
-                    )
-                feedbacks = []
-                for type_, id_, params, body in actions:
-                    ok, fb_text, info = execute_action(
-                        type_,
-                        id_,
-                        params,
-                        body,
 
-                        shell_timeout=self._config["shell_timeout"],
-                        work_dir=self._config.get("work_dir"),
-                        action_meta=self._config.get("action_meta"),
+            # 首轮：用户消息（可能叠加排队消息，这里首轮只有本条）
+            reply = self._agent.send(self._build_message([("用户消息", user_text)]))
+
+            while True:
+                # 内层：动作链
+                while True:
+                    actions = parse_actions(reply)
+                    if not actions:
+                        break
+                    clean = strip_actions(reply)
+                    if clean:
+                        self._js(
+                            f"addMessage('assistant', {json.dumps(clean, ensure_ascii=False)})"
+                        )
+                    feedbacks = []
+                    auto_cmds = []
+                    for type_, id_, params, body in actions:
+                        # auto_mode 是控制流级动作，运行时拦截，不走普通执行器
+                        if type_ == "auto_mode":
+                            cmd = (body or params or "").strip().lower()
+                            auto_cmds.append(cmd)
+                            self._js("addAction(" + json.dumps({
+                                "type": "auto_mode", "id": id_,
+                                "icon": "fa-solid fa-robot", "label": "自动模式",
+                                "color": "#22d3ee", "success": True,
+                                "summary": "自动模式 " + (cmd or "on"),
+                                "duration_ms": 0,
+                            }, ensure_ascii=False) + ")")
+                            continue
+                        ok, fb_text, info = execute_action(
+                            type_, id_, params, body,
+                            shell_timeout=self._config["shell_timeout"],
+                            work_dir=self._config.get("work_dir"),
+                            action_meta=self._config.get("action_meta"),
+                        )
+                        self._js("addAction(" + json.dumps(info, ensure_ascii=False) + ")")
+                        self._js("addHistory(" + json.dumps(info, ensure_ascii=False) + ")")
+                        if get_param_bool(params, "replay", True):
+                            feedbacks.append(fb_text)
+                    # 应用 auto_mode 指令（off 优先于 on）
+                    if "off" in auto_cmds:
+                        self._set_auto_mode(False)
+                    elif "on" in auto_cmds:
+                        self._set_auto_mode(True)
+                    if not feedbacks:
+                        reply = ""
+                        break
+                    reply = self._agent.send(self._build_message([("工具输出", "\n\n".join(feedbacks))]))
+                if reply:
+                    self._js(
+                        f"addMessage('assistant', {json.dumps(reply, ensure_ascii=False)})"
                     )
-                    self._js("addAction(" + json.dumps(info, ensure_ascii=False) + ")")
-                    self._js("addHistory(" + json.dumps(info, ensure_ascii=False) + ")")
-                    if get_param_bool(params, "replay", False):
-                        feedbacks.append(fb_text)
-                if not feedbacks:
-                    reply = ""
+
+                # 外层：决定是否继续下一轮
+                blocks = []
+                # 1) 排队消息优先
+                pending = self._drain_pending()
+                if pending:
+                    blocks.append(("用户消息", pending))
+                # 2) 自动模式续接
+                if self._auto_mode:
+                    cap = self._auto_max_rounds()
+                    if self._auto_round >= cap:
+                        # 超上限：提醒 + 自动关
+                        self._js('showToast("自动模式已达上限 ' + str(cap) + ' 轮，已暂停")')
+                        self._js("addMessage('assistant', " + json.dumps(
+                            "⚠️ 自动模式已达 " + str(cap) + " 轮上限，已自动暂停。需要继续请手动开启。",
+                            ensure_ascii=False) + ")")
+                        self._set_auto_mode(False)
+                    else:
+                        self._auto_round += 1
+                        self._set_auto_mode(True)   # 刷新前端轮数显示
+                        blocks.append(("系统提示",
+                            "自动模式：继续推进当前任务（第 " + str(self._auto_round) + "/" + str(cap) + " 轮）。\n"
+                            "完成目标后请调用 auto_mode off 关闭自动模式。\n"
+                            "若需要用户决策或确认，请用 quiz 出题并先调用 auto_mode off。"))
+                if not blocks:
                     break
-                fb_text = "[ActionOutput]\n" + "\n\n".join(feedbacks)
-                reply = self._agent.send(fb_text)
-            if reply:
-                self._js(
-                    f"addMessage('assistant', {json.dumps(reply, ensure_ascii=False)})"
-                )
+                reply = self._agent.send(self._build_message(blocks))
+                if not reply:
+                    break
         except Exception as e:
             self._js(
                 f"addMessage('assistant', {json.dumps(f'❌ 错误: {e}', ensure_ascii=False)})"
@@ -402,8 +509,8 @@ class Api:
             self._js("setAgentInitialized(false)")
         finally:
             self._busy = False
+            self._set_auto_mode(False)
             self._js("setBusy(false)")
-            # 一轮结束：刷新状态栏，清掉"限速等待"等进度文案，同步最新 page_url
             if self._agent is not None and self._agent.is_connected:
                 self._set_status("connected")
             else:

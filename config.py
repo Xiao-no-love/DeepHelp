@@ -39,6 +39,7 @@ DEFAULT_CONFIG = {
     },
     "deepseek_url": "https://chat.deepseek.com/",
     "max_action_rounds": 50,
+    "auto_max_rounds": 5,
     "action_timeout": 120,
     "shell_timeout": 30,
     "min_send_interval": 15,

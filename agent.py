@@ -477,7 +477,6 @@ class DeepSeekAgent:
         persona = self._cfg.get("persona")
         reply = self.send(build_system_prompt(persona))
         return reply
-        return reply
 
     def disconnect(self):
         """断开连接，释放 Playwright 资源"""

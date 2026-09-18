@@ -41,6 +41,7 @@
         var historyData = [];
         var actionCounter = 0;
         var agentInitialized = false;
+        var agentBusy = false;
         var modalConfirmAction = null;
         var sentChars = 0;
         var receivedChars = 0;
@@ -129,6 +130,8 @@
             var cwdEl = document.getElementById('sb-cwd');
             cwdEl.textContent = 'CWD: ' + (obj.cwd || '--');
             cwdEl.title = obj.cwd_full || '';
+            // 驱动自动模式徽章
+            setAutoMode({ on: !!obj.auto_mode, round: obj.auto_round || 0, max: obj.auto_max || 5 });
         }
         // ====== 消息 ======
         function applyFadeInChildren(el) {
@@ -307,7 +310,7 @@
                 updateQuizSubmit(t.closest('.quiz-group'));
             }
         });
-        function addMessage(role, text) {
+        function addMessage(role, text, queued) {
             if (role === 'assistant') {
                 receivedChars += text.length;
                 updateStats();
@@ -337,9 +340,18 @@
                 var div = document.createElement('div');
                 div.className = 'msg ' + role;
                 div.textContent = text;
+                if (queued) {
+                    // 排队消息：不触发打字机，加「排队中」标记，等下一轮真正发出
+                    var tag = document.createElement('span');
+                    tag.className = 'queued-tag';
+                    tag.textContent = '排队中';
+                    div.appendChild(tag);
+                    chatEl.appendChild(div);
+                    scrollBottom(chatEl);
+                    return;
+                }
                 chatEl.appendChild(div);
                 scrollBottom(chatEl);
-
                 setTimeout(() => {
                     virtualMessage('assistant');
                 }, 100);
@@ -717,24 +729,18 @@
         }
         // 覆盖浏览图片的行为，调用后端并自动应用背景
         // 在 api.py 中 browse_file 返回后会触发 loadSettings，所以不需要额外逻辑
-        // ====== 输入与发送 ======
         function setBusy(b) {
-            inputEl.disabled = b;
-            sendBtn.disabled = b;
+            agentBusy = b;
+            // 不再禁用输入框/发送按钮：忙碌时仍可输入，消息会排队到下一轮
             var divider = document.getElementById('chat-divider');
             if (divider) {
                 if (b) divider.classList.add('thinking');
                 else divider.classList.remove('thinking');
             }
-            if (b) {
-                inputEl.placeholder = '等待助手回复...';
-            } else {
-                inputEl.placeholder = '输入消息...';
-                inputEl.focus();
-            }
+            inputEl.placeholder = b ? '助手处理中…（仍可输入，将排队）' : '输入消息...';
+            if (!b) inputEl.focus();
         }
         function send() {
-            if (sendBtn.disabled) return;
             var text = inputEl.value.trim();
             if (!text) return;
             if (!agentInitialized) {
@@ -750,6 +756,14 @@
         }
         function doSend(text) {
             setAgentInitialized(true);
+            if (agentBusy) {
+                // 忙时：显示带「排队中」标记的用户气泡，不再触发打字机
+                addMessage('user', text, true);
+                if (window.pywebview && window.pywebview.api) {
+                    window.pywebview.api.send_message(text);
+                }
+                return;
+            }
             addMessage('user', text);
             sentChars += text.length;
             updateStats();
@@ -788,6 +802,49 @@
                 if (window.fsLoad) window.fsLoad(null);
             });
         }
+        // ====== 自动模式 & 消息排队 UI ======
+        // 状态：由后端 setStatus 推送 auto_mode/auto_round/auto_max 驱动
+        function setAutoMode(info) {
+            var badge = document.getElementById('auto-badge');
+            if (!badge) return;
+            info = info || {};
+            if (info.on) {
+                badge.classList.add('on');
+                badge.querySelector('.auto-round').textContent =
+                    (info.round || 0) + '/' + (info.max || 5);
+            } else {
+                badge.classList.remove('on');
+                badge.querySelector('.auto-round').textContent = '';
+            }
+        }
+        function toggleAutoMode() {
+            // 用当前徽章状态取反（前端只发意图，后端为准）
+            var badge = document.getElementById('auto-badge');
+            var on = badge && badge.classList.contains('on');
+            if (window.pywebview && window.pywebview.api) {
+                window.pywebview.api.set_auto_mode_ui(!on);
+            }
+        }
+        function pauseAutoMode() {
+            if (window.pywebview && window.pywebview.api) {
+                window.pywebview.api.pause_auto_mode();
+            }
+        }
+        function resetAutoRound() {
+            if (window.pywebview && window.pywebview.api) {
+                window.pywebview.api.reset_auto_round();
+            }
+        }
+        // 忙时排队的消息：右侧标「排队中」，发送前 clearQueuedBadge 清掉
+        function markQueued(text) {
+            // 气泡由 doSend 已显示并带「排队中」标记，这里只提示，避免重复
+            showToast('已排队，将在下一轮发送');
+        }
+        function clearQueuedBadge() {
+            var els = document.querySelectorAll('.msg.user .queued-tag');
+            for (var i = 0; i < els.length; i++) els[i].remove();
+        }
+
         // 暴露全局函数给 pywebview 调用
         window.applyBackground = applyBackground;
         window.applyFontScale = applyFontScale;
@@ -815,6 +872,12 @@
         window.removeBackground = removeBackground;
         window.copyOutput = copyOutput;
         window.toggleHistoryDetail = toggleHistoryDetail;
+        window.setAutoMode = setAutoMode;
+        window.toggleAutoMode = toggleAutoMode;
+        window.pauseAutoMode = pauseAutoMode;
+        window.resetAutoRound = resetAutoRound;
+        window.markQueued = markQueued;
+        window.clearQueuedBadge = clearQueuedBadge;
 
         // ====== 资源管理器 + 技能记录（侧边栏）======
         var fsCurrentPath = null;
@@ -1025,6 +1088,9 @@
         'toggle-settings': function () { toggleSettings(); },
         'win-minimize': function () { window.pywebview && window.pywebview.api && window.pywebview.api.minimize_window(); },
         'win-maximize': function () { window.pywebview && window.pywebview.api && window.pywebview.api.toggle_maximize(); },
+        'toggle-auto-mode': function () { toggleAutoMode(); },
+        'pause-auto-mode': function () { pauseAutoMode(); },
+        'reset-auto-round': function () { resetAutoRound(); },
         'win-close': function () { window.pywebview && window.pywebview.api && window.pywebview.api.close_window(); },
         'initialize-agent': function () { initializeAgent(); },
         'connect-page': function () { connectPage(); },
