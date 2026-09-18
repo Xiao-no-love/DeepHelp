@@ -759,6 +759,10 @@
             if (agentBusy) {
                 // 忙时：显示带「排队中」标记的用户气泡，不再触发打字机
                 addMessage('user', text, true);
+                sentChars += text.length;
+                updateStats();
+                inputEl.value = '';
+                inputEl.style.height = 'auto';
                 if (window.pywebview && window.pywebview.api) {
                     window.pywebview.api.send_message(text);
                 }

@@ -525,8 +525,8 @@
             color: var(--text-regular);
             align-self: flex-start;
             border-bottom-left-radius: 6px;
-            max-width: 100%;       /* AI 输出占满整行宽度，长表格/代码更舒展 */
-            width: 100%;
+            max-width: 100%;       /* 长表格/代码可撑满整行 */
+            width: fit-content;    /* 短消息按内容收缩，不再撑满 */
         }
 
         .msg.assistant p {

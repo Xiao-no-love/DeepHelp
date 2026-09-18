@@ -440,10 +440,19 @@ _PROTOCOL_TAIL = (
 
 def build_tool_protocol(registry: Dict = None) -> str:
     reg = registry if registry is not None else get_registry()
-    items = sorted(reg.values(), key=lambda x: x["meta"].get("order", 999))
+    # 按 order（相同则按 type 名）排序；编号由这里动态生成，技能文件里不要写死编号
+    items = sorted(reg.values(),
+                   key=lambda x: (x["meta"].get("order", 999), x["meta"].get("type", "")))
     parts = [_PROTOCOL_HEAD]
-    for item in items:
+    for idx, item in enumerate(items, 1):
         p = item["meta"].get("prompt", "") or item["meta"].get("description", "")
+        # 剥掉技能文件里可能写死的前导编号（如 "11. "），统一由这里重排
+        p = re.sub(r"^\s*\d+\.\s*", "", p)
+        # 给首行加上动态编号
+        lines = p.split("\n")
+        if lines:
+            lines[0] = str(idx) + ". " + lines[0]
+        p = "\n".join(lines)
         if not p.rstrip().endswith("\n"):
             p += "\n"
         parts.append(p)

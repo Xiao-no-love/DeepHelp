@@ -15,7 +15,7 @@ META = {
     "icon": "fa-solid fa-brain",
     "label": "编辑提示词",
     "color": "#c084fc",
-    "order": 110,
+    "order": 111,
     "description": "读写自己的 prompt.json（persona/self_rules/notes/format_rules），路径自动定位",
     "params": [
         {"name": "field", "required": True, "desc": "目标字段：persona / self_rules / notes / format_rules"},

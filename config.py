@@ -62,6 +62,8 @@ DEFAULT_CONFIG = {
         "replace_lines": ["fa-solid fa-scissors", "行替换", "#38bdf8"],
         "dir_list": ["fa-solid fa-folder-tree", "目录列表", "#9ca3af"],
         "python_reset": ["fa-solid fa-rotate", "重置Python", "#f472b6"],
+        "auto_mode": ["fa-solid fa-robot", "自动模式", "#22d3ee"],
+        "notice": ["fa-solid fa-bell", "系统通知", "#facc15"],
     },
     "agent": {
         "send_svg": SEND_SVG,

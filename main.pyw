@@ -73,7 +73,7 @@ def main():
         easy_drag=False,
         background_color="#000000",
     )
-    webview.start(http_server=True, debug=True)
+    webview.start(http_server=True, debug=False)
 
 
 if __name__ == "__main__":

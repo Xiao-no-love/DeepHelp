@@ -350,13 +350,27 @@ class Api:
         return "\n\n".join(parts)
 
     def _drain_pending(self):
-        """取出并清空排队消息，返回合并后的 [用户消息] 块文本（无则 None）"""
+        """取出并清空排队消息，返回其纯文本（无则 None）"""
         if not self._pending:
             return None
         msgs = self._pending
         self._pending = []
         self._js("clearQueuedBadge()")
-        return self._build_message([("用户消息", "\n\n".join(msgs))])
+        return "\n\n".join(msgs)
+
+    def _merge_pending(self, blocks):
+        """把排队消息并入本次发送：若已有 [用户消息] 块则追加进同一块（叠加），
+        否则新增一块。无排队消息则原样返回。"""
+        pending = self._drain_pending()
+        blocks = list(blocks)
+        if not pending:
+            return blocks
+        for i, (title, body) in enumerate(blocks):
+            if title == "用户消息":
+                blocks[i] = ("用户消息", (str(body or "") + "\n\n" + pending).strip())
+                return blocks
+        blocks.append(("用户消息", pending))
+        return blocks
 
     def send_message(self, text):
         """任何时刻都接受消息：空闲则立即执行；忙则入队，等下一轮带出。"""
@@ -414,7 +428,8 @@ class Api:
                 self._set_status("connected")
 
             # 首轮：用户消息（可能叠加排队消息，这里首轮只有本条）
-            reply = self._agent.send(self._build_message([("用户消息", user_text)]))
+            reply = self._agent.send(self._build_message(
+                self._merge_pending([("用户消息", user_text)])))
 
             while True:
                 # 内层：动作链
@@ -465,7 +480,9 @@ class Api:
                     if not feedbacks:
                         reply = ""
                         break
-                    reply = self._agent.send(self._build_message([("工具输出", "\n\n".join(feedbacks))]))
+                    # 发送工具输出前，把老板期间插的话搭车并入
+                    reply = self._agent.send(self._build_message(
+                        self._merge_pending([("工具输出", "\n\n".join(feedbacks))])))
                 if reply:
                     self._js(
                         f"addMessage('assistant', {json.dumps(reply, ensure_ascii=False)})"
@@ -473,7 +490,7 @@ class Api:
 
                 # 外层：决定是否继续下一轮
                 blocks = []
-                # 1) 排队消息优先
+                # 1) 排队消息优先（兜底：本轮 AI 纯文本回复后，排队消息单独带出）
                 pending = self._drain_pending()
                 if pending:
                     blocks.append(("用户消息", pending))
@@ -496,7 +513,7 @@ class Api:
                             "若需要用户决策或确认，请用 quiz 出题并先调用 auto_mode off。"))
                 if not blocks:
                     break
-                reply = self._agent.send(self._build_message(blocks))
+                reply = self._agent.send(self._build_message(self._merge_pending(blocks)))
                 if not reply:
                     break
         except Exception as e:
