@@ -58,9 +58,21 @@ def _notify(title, msg):
     try:
         with os.fdopen(fd, "w", encoding="utf-8-sig") as f:
             f.write(script)
+        # CREATE_NO_WINDOW：避免弹出黑窗口（powershell 默认会带控制台）
+        CREATE_NO_WINDOW = 0x08000000
+        si = None
+        try:
+            si = subprocess.STARTUPINFO()
+            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            si.wShowWindow = 0  # SW_HIDE
+        except Exception:
+            si = None
         r = subprocess.run(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path],
+            ["powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
+             "-ExecutionPolicy", "Bypass", "-File", path],
             capture_output=True, text=True, timeout=15,
+            creationflags=CREATE_NO_WINDOW,
+            startupinfo=si,
         )
         return r.returncode, (r.stderr or "").strip()
     finally:

@@ -22,7 +22,7 @@ import webview
 from webview.dom import DOMEventHandler
 
 from config import DEFAULT_CONFIG, WORK_DIR, CONFIG_FILE, deep_merge
-from action import parse_actions, strip_actions, execute_action, get_param_bool
+from action import parse_actions, strip_actions, parse_segments, execute_action, get_param_bool
 from agent import DeepSeekAgent, ensure_chrome_running
 
 
@@ -419,17 +419,22 @@ class Api:
             while True:
                 # 内层：动作链
                 while True:
-                    actions = parse_actions(reply)
-                    if not actions:
+                    segs = parse_segments(reply)
+                    has_action = any(s[0] == "action" for s in segs)
+                    if not has_action:
                         break
-                    clean = strip_actions(reply)
-                    if clean:
-                        self._js(
-                            f"addMessage('assistant', {json.dumps(clean, ensure_ascii=False)})"
-                        )
                     feedbacks = []
                     auto_cmds = []
-                    for type_, id_, params, body in actions:
+                    for kind, payload in segs:
+                        if kind == "text":
+                            # 按原文顺序展示文本段（动作前/动作间的文字各成一条消息）
+                            txt = payload.strip()
+                            if txt:
+                                self._js(
+                                    f"addMessage('assistant', {json.dumps(txt, ensure_ascii=False)})"
+                                )
+                            continue
+                        type_, id_, params, body = payload
                         # auto_mode 是控制流级动作，运行时拦截，不走普通执行器
                         if type_ == "auto_mode":
                             cmd = (body or params or "").strip().lower()

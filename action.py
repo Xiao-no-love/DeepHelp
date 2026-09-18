@@ -192,7 +192,52 @@ def strip_actions(text: str) -> str:
         out.append(text[pos:start])
         pos = ci + clen
     return "".join(out).strip()
-
+def parse_segments(text: str) -> List[Tuple[str, Any]]:
+    """按出现顺序把回复切成「文本段 / 动作段」，供前端按原文顺序交错展示。
+    返回 list，元素为 ('text', 文本) 或 ('action', (type, id, params, body))。"""
+    segs = []
+    pos = 0
+    n = len(text)
+    olen = len(_OPEN)
+    clen = len(_CLOSE)
+    while pos < n:
+        start = text.find(_OPEN, pos)
+        if start == -1:
+            segs.append(("text", text[pos:]))
+            break
+        after = start + olen
+        if after < n and not (text[after].isspace() or text[after] == _GT):
+            segs.append(("text", text[pos:after]))
+            pos = after
+            continue
+        he = _scan_header_end(text, after)
+        if he == -1:
+            segs.append(("text", text[pos:]))
+            break
+        attrs = _parse_attrs(text[after:he])
+        t = attrs.get("type")
+        if t is None:
+            segs.append(("text", text[pos:he + 1]))
+            pos = he + 1
+            continue
+        ci = _find_close(text, he + 1)
+        if ci == -1:
+            segs.append(("text", text[pos:]))
+            break
+        segs.append(("text", text[pos:start]))
+        raw_body = text[he + 1:ci]
+        if raw_body.startswith("\r\n"):
+            raw_body = raw_body[2:]
+        elif raw_body.startswith("\n"):
+            raw_body = raw_body[1:]
+        if raw_body.endswith("\r\n"):
+            raw_body = raw_body[:-2]
+        elif raw_body.endswith("\n"):
+            raw_body = raw_body[:-1]
+        body = unescape_xml(raw_body)
+        segs.append(("action", (t, attrs.get("id"), text[after:he], body)))
+        pos = ci + clen
+    return segs
 
 # ========== 参数解析 ==========
 def get_param(params_str: str, key: str) -> Optional[str]:
@@ -485,7 +530,7 @@ def execute_action(
 
 
 __all__ = [
-    "parse_actions", "strip_actions", "get_param", "get_param_int", "get_param_bool",
+    "parse_actions", "strip_actions", "parse_segments", "get_param", "get_param_int", "get_param_bool",
     "execute_action", "Context", "PythonExecutor", "_python_executor",
     "load_actions", "get_registry", "reload_registry", "build_tool_protocol",
     "unescape_xml", "ACTIONS_DIR", "AUDIT_LOG_PATH",
