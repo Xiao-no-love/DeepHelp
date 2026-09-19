@@ -3,10 +3,10 @@
 
 import os
 
-_LT = chr(60)
-_GT = chr(62)
-_A = _LT + "action"
-_C = _LT + "/action" + _GT
+_LB = "\u27ea"
+_RB = "\u27eb"
+_A = _LB + "action"
+_C = _LB + "/action" + _RB
 
 META = {
     "type": "dir_list",
@@ -20,7 +20,7 @@ META = {
     "prompt": (
         "7. dir_list：列出目录中的文件和子目录。可选参数 path（不填则为当前工作目录）。\n"
         "   示例：\n"
-        + "   " + _A + ' type="dir_list" id="list1" path="src"' + _GT + _C + "\n"
+        + "   " + _A + ' type="dir_list" id="list1" path="src"' + _RB + _C + "\n"
     ),
 }
 

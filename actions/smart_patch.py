@@ -11,11 +11,11 @@ except ImportError:
     whatthepatch = None
     _wt_apply = None
 
-_LT = chr(60)
-_GT = chr(62)
+_LB = "\u27ea"
+_RB = "\u27eb"
 _DQ = chr(34)
-_A = _LT + "action"
-_C = _LT + "/action" + _GT
+_A = _LB + "action"
+_C = _LB + "/action" + _RB
 
 META = {
     "type": "smart_patch",
@@ -42,7 +42,7 @@ META = {
         "   c) hunk 边界必须覆盖所有受影响的旧行——如果某行会被新增内容「顶到后面」，必须将其纳入 hunk 并标记为删除(-)。\n"
         "   d) 连续修改的不同区域必须拆分为多个 hunk，每个 hunk 独立校验。\n"
         "   示例（含双 hunk，注意尾部上下文完整，行数精确）：\n"
-        + "   " + _A + ' type="smart_patch" id="sp1" file="app.py"' + _GT + "\n"
+        + "   " + _A + ' type="smart_patch" id="sp1" file="app.py"' + _RB + "\n"
         "--- a/app.py\n"
         "+++ b/app.py\n"
         "@@ -1,3 +1,3 @@\n"

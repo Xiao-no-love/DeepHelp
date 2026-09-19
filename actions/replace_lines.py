@@ -10,10 +10,10 @@
 import os
 import re
 
-_LT = chr(60)
-_GT = chr(62)
-_A = _LT + "action"
-_C = _LT + "/action" + _GT
+_LB = "\u27ea"
+_RB = "\u27eb"
+_A = _LB + "action"
+_C = _LB + "/action" + _RB
 
 META = {
     "type": "replace_lines",
@@ -44,7 +44,7 @@ META = {
         "   @@ 头后可跟 expect 做锚点校验：@@ 740-744 expect=function send()\n"
         "   替换成功后会回显「被移除的内容」和「行数增减」，请据此核对是否误伤。\n"
         "   示例：\n"
-        + "   " + _A + ' type="replace_lines" id="rl1" file="app.py" start="5"' + _GT + "\n"
+        + "   " + _A + ' type="replace_lines" id="rl1" file="app.py" start="5"' + _RB + "\n"
         + "替换后的新行内容\n"
         + _C + "\n"
     ),

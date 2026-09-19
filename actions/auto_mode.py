@@ -1,10 +1,10 @@
 
 """技能：auto_mode — 自动模式开关（控制流级，运行时拦截）"""
 
-_LT = chr(60)
-_GT = chr(62)
-_A = _LT + "action"
-_C = _LT + "/action" + _GT
+_LB = "\u27ea"
+_RB = "\u27eb"
+_A = _LB + "action"
+_C = _LB + "/action" + _RB
 
 META = {
     "type": "auto_mode",
@@ -24,8 +24,8 @@ META = {
         "并在关闭前用 notice 给老板发一条完成通知（如「任务完成」+ 摘要）；"
         "若需要老板决策/确认，也要先 off 再用 quiz 提问。\n"
         "    示例：\n"
-        "    " + _A + ' type="auto_mode" id="am1"' + _GT + "on" + _C + "\n"
-        "    " + _A + ' type="auto_mode" id="am2"' + _GT + "off" + _C + "\n"
+        "    " + _A + ' type="auto_mode" id="am1"' + _RB + "on" + _C + "\n"
+        "    " + _A + ' type="auto_mode" id="am2"' + _RB + "off" + _C + "\n"
     ),
 }
 

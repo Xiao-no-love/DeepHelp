@@ -5,10 +5,10 @@
 因此无论开发态还是打包态都能正确定位。
 """
 
-_LT = chr(60)
-_GT = chr(62)
-_A = _LT + "action"
-_C = _LT + "/action" + _GT
+_LB = "\u27ea"
+_RB = "\u27eb"
+_A = _LB + "action"
+_C = _LB + "/action" + _RB
 
 META = {
     "type": "prompt_edit",
@@ -28,10 +28,10 @@ META = {
         "    参数 field（必填：persona/self_rules/notes/format_rules）、mode（可选：set 覆盖 / append 追加 / read 读取，默认 set）。\n"
         "    body 为要写入的内容（mode=read 时 body 可留空）。\n"
         "    示例（把一条新经验追加到 notes）：\n"
-        + "    " + _A + ' type="prompt_edit" id="pe1" field="notes" mode="append"' + _GT
+        + "    " + _A + ' type="prompt_edit" id="pe1" field="notes" mode="append"' + _RB
         + "\n- 新经验内容\n" + _C + "\n"
         "    示例（读取当前 notes）：\n"
-        + "    " + _A + ' type="prompt_edit" id="pe2" field="notes" mode="read"' + _GT + _C + "\n"
+        + "    " + _A + ' type="prompt_edit" id="pe2" field="notes" mode="read"' + _RB + _C + "\n"
         "    注意：改完 prompt.json 后立即按照写入的规则生效。\n"
     ),
 }

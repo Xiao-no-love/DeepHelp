@@ -3,10 +3,10 @@
 
 import os
 
-_LT = chr(60)
-_GT = chr(62)
-_C = _LT + "/action" + _GT
-_A = _LT + "action"
+_LB = "\u27ea"
+_RB = "\u27eb"
+_C = _LB + "/action" + _RB
+_A = _LB + "action"
 
 META = {
     "type": "file_read",
@@ -23,7 +23,7 @@ META = {
     "prompt": (
         "3. file_read：读取文件内容。必需参数 file 指定文件路径，可选 max_chars 限制读取字符数（默认 10000）。\n"
         "   示例：\n"
-        + "   " + _A + ' type="file_read" id="read1" file="data.txt" max_chars="10000"' + _GT + _C + "\n"
+        + "   " + _A + ' type="file_read" id="read1" file="data.txt" max_chars="10000"' + _RB + _C + "\n"
     ),
 }
 

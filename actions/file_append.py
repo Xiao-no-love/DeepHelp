@@ -3,10 +3,10 @@
 
 import os
 
-_LT = chr(60)
-_GT = chr(62)
-_A = _LT + "action"
-_C = _LT + "/action" + _GT
+_LB = "\u27ea"
+_RB = "\u27eb"
+_A = _LB + "action"
+_C = _LB + "/action" + _RB
 
 META = {
     "type": "file_append",
@@ -20,7 +20,7 @@ META = {
     "prompt": (
         "5. file_append：追加内容到文件末尾。必需参数 file，body内为追加内容。\n"
         "   示例：\n"
-        + "   " + _A + ' type="file_append" id="append1" file="log.txt"' + _GT
+        + "   " + _A + ' type="file_append" id="append1" file="log.txt"' + _RB
         + "\n追加这一行\n" + _C + "\n"
     ),
 }

@@ -3,10 +3,10 @@
 
 import os
 
-_LT = chr(60)
-_GT = chr(62)
-_A = _LT + "action"
-_C = _LT + "/action" + _GT
+_LB = "\u27ea"
+_RB = "\u27eb"
+_A = _LB + "action"
+_C = _LB + "/action" + _RB
 
 META = {
     "type": "file_write",
@@ -20,7 +20,7 @@ META = {
     "prompt": (
         "4. file_write：写入文件（覆盖原有内容）。必需参数 file，body内为要写入的完整内容。\n"
         "   示例：\n"
-        + "   " + _A + ' type="file_write" id="write1" file="log.txt"' + _GT
+        + "   " + _A + ' type="file_write" id="write1" file="log.txt"' + _RB
         + "\n新的日志内容\n" + _C + "\n"
     ),
 }

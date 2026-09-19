@@ -4,10 +4,10 @@
 import os
 import subprocess
 
-_LT = chr(60)
-_GT = chr(62)
-_A = _LT + "action"
-_C = _LT + "/action" + _GT
+_LB = "\u27ea"
+_RB = "\u27eb"
+_A = _LB + "action"
+_C = _LB + "/action" + _RB
 
 META = {
     "type": "shell",
@@ -24,7 +24,7 @@ META = {
     "prompt": (
         "2. shell：执行shell命令。支持可选参数 cwd 指定工作目录，timeout 指定超时秒数。\n"
         "   示例：\n"
-        + "   " + _A + ' type="shell" id="shell1" cwd="C:\\项目" timeout="60"' + _GT
+        + "   " + _A + ' type="shell" id="shell1" cwd="C:\\项目" timeout="60"' + _RB
         + "\ndir\n" + _C + "\n"
     ),
 }

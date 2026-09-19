@@ -4,10 +4,10 @@
 import os
 import shutil
 
-_LT = chr(60)
-_GT = chr(62)
-_A = _LT + "action"
-_C = _LT + "/action" + _GT
+_LB = "\u27ea"
+_RB = "\u27eb"
+_A = _LB + "action"
+_C = _LB + "/action" + _RB
 
 META = {
     "type": "file_delete",
@@ -21,7 +21,7 @@ META = {
     "prompt": (
         "6. file_delete：删除指定文件或目录。必需参数 file。\n"
         "   示例：\n"
-        + "   " + _A + ' type="file_delete" id="delete1" file="temp.txt"' + _GT + _C + "\n"
+        + "   " + _A + ' type="file_delete" id="delete1" file="temp.txt"' + _RB + _C + "\n"
     ),
 }
 

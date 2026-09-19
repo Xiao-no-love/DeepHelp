@@ -1,10 +1,10 @@
 
 """技能：python_reset — 重置 Python 执行环境"""
 
-_LT = chr(60)
-_GT = chr(62)
-_A = _LT + "action"
-_C = _LT + "/action" + _GT
+_LB = "\u27ea"
+_RB = "\u27eb"
+_A = _LB + "action"
+_C = _LB + "/action" + _RB
 
 META = {
     "type": "python_reset",
@@ -18,7 +18,7 @@ META = {
     "prompt": (
         "10. python_reset：重置 Python 执行环境，清除所有已定义的变量和导入的模块。\n"
         "    示例：\n"
-        + "    " + _A + ' type="python_reset" id="reset1"' + _GT + _C + "\n"
+        + "    " + _A + ' type="python_reset" id="reset1"' + _RB + _C + "\n"
     ),
 }
 

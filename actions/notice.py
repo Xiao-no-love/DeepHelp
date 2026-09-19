@@ -5,10 +5,10 @@ import html
 import tempfile
 import subprocess
 
-_LT = chr(60)
-_GT = chr(62)
-_A = _LT + "action"
-_C = _LT + "/action" + _GT
+_LB = "\u27ea"
+_RB = "\u27eb"
+_A = _LB + "action"
+_C = _LB + "/action" + _RB
 
 _APPID = "{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe"
 
@@ -41,7 +41,7 @@ META = {
         "    参数：title（可选，标题，默认 DeepHelp）、msg（可选，正文，也可写在 body）。\n"
         "    适用场景：任务完成、需要老板关注、自动模式下的阶段汇报等。\n"
         "    示例：\n"
-        "    " + _A + ' type="notice" id="n1" title="任务完成"' + _GT + "已修改 3 个文件，请查看" + _C + "\n"
+        "    " + _A + ' type="notice" id="n1" title="任务完成"' + _RB + "已修改 3 个文件，请查看" + _C + "\n"
     ),
 }
 

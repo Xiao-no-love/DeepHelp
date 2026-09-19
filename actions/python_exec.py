@@ -3,10 +3,10 @@
 
 import os
 
-_LT = chr(60)
-_GT = chr(62)
-_A = _LT + "action"
-_C = _LT + "/action" + _GT
+_LB = "\u27ea"
+_RB = "\u27eb"
+_A = _LB + "action"
+_C = _LB + "/action" + _RB
 
 META = {
     "type": "python",
@@ -22,7 +22,7 @@ META = {
     "prompt": (
         "1. python：执行Python代码（body内为代码）。支持可选参数 cwd 指定工作目录。\n"
         "   示例：\n"
-        + "   " + _A + ' type="python" id="example1"' + _GT
+        + "   " + _A + ' type="python" id="example1"' + _RB
         + '\nprint("Hello, 老板")\n' + _C + "\n"
     ),
 }

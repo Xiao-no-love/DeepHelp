@@ -20,12 +20,12 @@ from typing import Optional, Tuple, Dict, Any, List
 # actions/*.py 是运行时动态加载的，PyInstaller 静态分析看不到其中的 import，故在此统一声明。
 import whatthepatch  # noqa: F401  (actions/smart_patch.py 依赖)
 
-_LT = chr(60)
-_GT = chr(62)
+_LB = "\u27ea"
+_RB = "\u27eb"
 _AMP = chr(38)
 _SEMI = chr(59)
-_OPEN = _LT + "action"
-_CLOSE = _LT + "/action" + _GT
+_OPEN = _LB + "action"
+_CLOSE = _LB + "/action" + _RB
 
 # 运行时数据目录：frozen 时为 exe 所在目录（可写、持久），否则为源码目录。
 if getattr(sys, "frozen", False):
@@ -75,7 +75,7 @@ def _scan_header_end(text: str, start: int) -> int:
         if q is None:
             if c in ('"', "'"):
                 q = c
-            elif c == _GT:
+            elif c == _RB:
                 return i
         elif c == q:
             q = None
@@ -114,7 +114,7 @@ def _find_close(text: str, start: int) -> int:
             continue
         if text.startswith(_OPEN, i):
             after = i + olen
-            if after < n and (text[after].isspace() or text[after] == _GT):
+            if after < n and (text[after].isspace() or text[after] == _RB):
                 depth += 1
                 i += olen
                 continue
@@ -133,7 +133,7 @@ def parse_actions(text: str) -> List[Tuple[str, Optional[str], str, str]]:
         if start == -1:
             break
         after = start + olen
-        if after < n and not (text[after].isspace() or text[after] == _GT):
+        if after < n and not (text[after].isspace() or text[after] == _RB):
             pos = start + 1
             continue
         he = _scan_header_end(text, after)
@@ -177,7 +177,7 @@ def strip_actions(text: str) -> str:
             out.append(text[pos:])
             break
         after = start + olen
-        if after < n and not (text[after].isspace() or text[after] == _GT):
+        if after < n and not (text[after].isspace() or text[after] == _RB):
             out.append(text[pos:start + olen])
             pos = start + olen
             continue
@@ -206,7 +206,7 @@ def parse_segments(text: str) -> List[Tuple[str, Any]]:
             segs.append(("text", text[pos:]))
             break
         after = start + olen
-        if after < n and not (text[after].isspace() or text[after] == _GT):
+        if after < n and not (text[after].isspace() or text[after] == _RB):
             segs.append(("text", text[pos:after]))
             pos = after
             continue
@@ -392,15 +392,16 @@ def reload_registry() -> Tuple[Dict, List]:
 
 
 # ========== Prompt 拼装 ==========
-_C = _LT + "/action" + _GT
-_A = _LT + "action"
+_C = _LB + "/action" + _RB
+_A = _LB + "action"
 
 _PROTOCOL_HEAD = (
-    "当你需要执行操作时，必须严格遵循使用如下完整的XML闭合标签形式包裹动作，"
+    "当你需要执行操作时，必须严格遵循使用如下定界符包裹动作，"
     "系统会自动解析并返回执行结果：\n"
-    + _A + ' type="动作类型" id="唯一标识符" 参数="值"' + _GT + "\n"
+    + _A + ' type="动作类型" id="唯一标识符" 参数="值"' + _RB + "\n"
     + "动作内容或代码\n"
     + _C + "\n"
+    + "（定界符为 ⟪ ⟫，正文无需任何转义）\n"
     + "【可用动作类型及参数说明】\n"
 )
 
@@ -410,10 +411,9 @@ _PROTOCOL_TAIL = (
     + "  · " + 'replay="true"' + "（默认，可省略）：执行结果会以 [工具输出] 形式返回给你，你能看到结果并据此决定下一步。\n"
     + "  · " + 'replay="false"' + "：执行结果不返回给你，仅用于无需查看结果的纯副作用操作。\n"
     + "默认即回传，因此绝大多数操作**无需显式写 replay**。仅当你确定某步结果无需查看（且不会影响后续判断）时，才写 replay=\"false\"。\n"
-    + "【XML 实体转义规则（已简化，务必记牢）】\n"
-    + "body 内容请原样书写，" + _LT + " " + _GT + " " + _AMP + " 引号等字符通常都无需转义。\n"
-    + "唯一例外：若内容里出现完整的 " + _C + " 这个序列，必须写成 " + _ENT_LT + "/action" + _ENT_GT + "，否则会被误判为标签结束。\n"
-    + "（同理，内容里出现 " + _A + " 开头的串，也建议做同样处理。）\n"
+    + "【书写规则（已大幅简化）】\n"
+    + "body 内容请原样书写——正文里出现尖括号、" + _LB + " " + _RB + "、乃至旧式 action 标签字样，都无需转义，不会误判。\n"
+    + "（仅当正文出现完整的 " + _C + " 新闭合定界符时才会被当作标签结束，正常写代码几乎不会遇到。）\n"
     + "【工具选择指引】\n"
     + "- 改文件前，先 file_read 拿到确切内容与行号。\n"
     + "- 改一两行 / 删除若干行 → replace_lines（按行号，最稳）。\n"
