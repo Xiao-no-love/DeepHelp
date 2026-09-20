@@ -17,8 +17,11 @@ import difflib
 import threading
 
 
-_ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SNAP_DIR = os.environ.get("DH_CHANGE_SNAP_DIR") or os.path.join(_ROOT_DIR, "service_logs", "_change_snapshots")
+if getattr(sys, "frozen", False):
+    _RUNTIME_DIR = os.path.dirname(sys.executable)   # exe 同级：持久、可写
+else:
+    _RUNTIME_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SNAP_DIR = os.environ.get("DH_CHANGE_SNAP_DIR") or os.path.join(_RUNTIME_DIR, "service_logs", "_change_snapshots")
 
 # 会被追踪的文件类动作
 FILE_ACTIONS = {"file_write", "file_append", "file_delete", "replace_lines", "smart_patch"}

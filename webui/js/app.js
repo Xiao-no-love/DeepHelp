@@ -385,6 +385,15 @@
             }, 50);
             virtualMessageDiv = div;
         }
+        // 消费未使用的打字机占位气泡：若 AI 本轮是纯动作/动作在前，占位会残留在那，
+        // 表现为「一条空消息」。动作卡片出现时调用它清掉占位。
+        function consumeVirtual() {
+            if (virtualMessageDiv != null) {
+                if (randCharType) { clearInterval(randCharType); randCharType = null; }
+                if (virtualMessageDiv.parentNode) virtualMessageDiv.parentNode.removeChild(virtualMessageDiv);
+                virtualMessageDiv = null;
+            }
+        }
         function getRandomChar() {
             // 字符池，包含字母、数字、符号、中文、日文、韩文
             const charRanges = [
@@ -398,6 +407,7 @@
         }
         // ====== 结构化动作气泡 ======
         function addAction(obj) {
+            consumeVirtual();
             commandCount++;
             // 工具调用的命令与输出也计入字符统计（归入“收到”侧）
             if (obj.command) receivedChars += obj.command.length;
@@ -466,6 +476,7 @@
         // ====== 动作三阶段（S3）：start / progress / end ======
         var _actionCards = {};
         function addActionStart(obj) {
+            consumeVirtual();
             if (!obj || !obj.id) return;
             var id = obj.id;
             var meta = obj.type ? { icon: obj.icon || '', label: obj.label || obj.type, color: obj.color || '#8b949e' } : null;

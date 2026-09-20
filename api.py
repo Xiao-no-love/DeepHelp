@@ -830,24 +830,17 @@ class Api:
             return {"ok": False, "error": str(e)}
     @staticmethod
     def _get_tracker():
-        """安全加载 ChangeTracker（源码/打包两种情形都能拿到）。"""
+        """安全加载 ChangeTracker：直接复用 action 的加载器（源码/打包路径都正确）。"""
         try:
-            import _change_tracker
-            return _change_tracker.get_tracker()
+            from action import _load_change_tracker
+            mod = _load_change_tracker()
+            if mod is not None:
+                return mod.get_tracker()
         except Exception:
             pass
         try:
-            import sys as _sys
-            import importlib.util
-            if getattr(_sys, "frozen", False):
-                p = os.path.join(os.path.dirname(_sys.executable), "actions", "_change_tracker.py")
-            else:
-                p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "actions", "_change_tracker.py")
-            spec = importlib.util.spec_from_file_location("_change_tracker", p)
-            mod = importlib.util.module_from_spec(spec)
-            _sys.modules["_change_tracker"] = mod
-            spec.loader.exec_module(mod)
-            return mod.get_tracker()
+            import _change_tracker
+            return _change_tracker.get_tracker()
         except Exception:
             return None
 
