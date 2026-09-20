@@ -44,8 +44,12 @@ class Api:
         self._auto_mode = False               # 自动模式开关
         self._auto_round = 0                  # 自动续接已用轮数
         self._task_queue = queue.Queue()
+        # S4：任务追踪（供看门狗监测长任务）
+        self._current_task = None              # (描述, 开始时间戳) 或 None
+        self._task_lock = threading.Lock()
         self._worker = threading.Thread(target=self._worker_loop, daemon=True)
         self._worker.start()
+        self._start_watchdog()
         # 预启动 Chrome：与窗口创建 / 前端加载并行，缩短"连接中"等待
         self._prelaunch_chrome()
         # Explorer 监测状态
@@ -53,16 +57,63 @@ class Api:
         self._last_explorer = set()
         self._watcher = None
         self._watch_stop = threading.Event()
-
     def _worker_loop(self):
         while True:
             task = self._task_queue.get()
             if task is None:
                 break
+            with self._task_lock:
+                self._current_task = (getattr(task, "__name__", "task"), time.time())
             try:
                 task()
             except Exception:
                 pass
+            finally:
+                with self._task_lock:
+                    self._current_task = None
+
+    def _start_watchdog(self):
+        """独立守护线程：监测当前任务是否长时间未完成。
+        只写日志 + 发系统通知，绝不调用 evaluate_js（避免线程冲突）。"""
+        def _loop():
+            try:
+                limit = int(self._config.get("action_timeout") or 120)
+            except (TypeError, ValueError):
+                limit = 120
+            reported = None
+            while True:
+                time.sleep(10)
+                with self._task_lock:
+                    cur = self._current_task
+                if not cur:
+                    reported = None
+                    continue
+                name, t0 = cur
+                elapsed = time.time() - t0
+                if elapsed > limit and reported != t0:
+                    reported = t0
+                    try:
+                        from action import AUDIT_LOG_PATH
+                        with open(AUDIT_LOG_PATH, "a", encoding="utf-8") as f:
+                            f.write(json.dumps({
+                                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                                "type": "watchdog", "id": None,
+                                "params": {"task": name, "elapsed": int(elapsed)},
+                                "result": "任务长时间未完成", "success": False,
+                                "duration_ms": int(elapsed * 1000),
+                            }, ensure_ascii=False) + "\n")
+                    except Exception:
+                        pass
+                    try:
+                        import subprocess as _sp
+                        _sp.Popen(
+                            ["powershell", "-NoProfile", "-Command",
+                             "[console]::beep(880,300)"],
+                            creationflags=0x08000000,
+                        )
+                    except Exception:
+                        pass
+        threading.Thread(target=_loop, daemon=True).start()
 
     def _post(self, task):
         self._task_queue.put(task)
@@ -462,13 +513,30 @@ class Api:
                                 "duration_ms": 0,
                             }, ensure_ascii=False) + ")")
                             continue
+                        # S3：执行前推 start（补 meta 供"运行中"卡片显示图标/标签）
+                        try:
+                            _pdict = {}
+                            import re as _re
+                            for _m in _re.finditer(r'([A-Za-z_][\w-]*)\s*=\s*"([^"]*)"', params or ""):
+                                _pdict[_m.group(1)] = _m.group(2)
+                        except Exception:
+                            _pdict = {}
+                        _am = (self._config.get("action_meta") or {}).get(type_)
+                        _sicon = _am[0] if _am else ""
+                        _slabel = _am[1] if _am else type_
+                        _scolor = _am[2] if _am else "#8b949e"
+                        self._js("addActionStart(" + json.dumps({
+                            "id": id_, "type": type_,
+                            "icon": _sicon, "label": _slabel, "color": _scolor,
+                            "path": _pdict.get("file") or _pdict.get("path") or "",
+                        }, ensure_ascii=False) + ")")
                         ok, fb_text, info = execute_action(
                             type_, id_, params, body,
                             shell_timeout=self._config["shell_timeout"],
                             work_dir=self._config.get("work_dir"),
                             action_meta=self._config.get("action_meta"),
                         )
-                        self._js("addAction(" + json.dumps(info, ensure_ascii=False) + ")")
+                        self._js("addActionEnd(" + json.dumps(info, ensure_ascii=False) + ")")
                         self._js("addHistory(" + json.dumps(info, ensure_ascii=False) + ")")
                         if get_param_bool(params, "replay", True):
                             feedbacks.append(fb_text)
@@ -699,3 +767,117 @@ class Api:
         if path:
             self._rejected_dirs.add(os.path.normpath(path))
         return {"ok": True}
+    # ── 本地服务管理（S2）──
+    @staticmethod
+    def _get_pm():
+        """安全加载 ProcessManager（源码/打包两种情形都能拿到）。"""
+        try:
+            import _process_manager
+            return _process_manager.get_manager()
+        except Exception:
+            pass
+        try:
+            import sys as _sys
+            if getattr(_sys, "frozen", False):
+                base = getattr(_sys, "_MEIPASS", None)
+            else:
+                base = None
+            if base:
+                p = os.path.join(base, "actions", "_process_manager.py")
+            else:
+                p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "actions", "_process_manager.py")
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("_process_manager", p)
+            mod = importlib.util.module_from_spec(spec)
+            _sys.modules["_process_manager"] = mod
+            spec.loader.exec_module(mod)
+            return mod.get_manager()
+        except Exception:
+            return None
+
+    def list_services(self):
+        """返回托管后台服务列表，供前端「本地服务」面板渲染。"""
+        pm = self._get_pm()
+        if pm is None:
+            return {"ok": False, "error": "进程管理器不可用", "services": []}
+        try:
+            return {"ok": True, "services": pm.list()}
+        except Exception as e:
+            return {"ok": False, "error": str(e), "services": []}
+
+    def stop_service(self, ident):
+        """停止指定服务（id 或 pid），含进程树。"""
+        pm = self._get_pm()
+        if pm is None:
+            return {"ok": False, "error": "进程管理器不可用"}
+        try:
+            ok, msg = pm.stop(ident)
+            return {"ok": ok, "msg": msg}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def service_log(self, ident, tail=50):
+        """读取服务日志尾部。"""
+        pm = self._get_pm()
+        if pm is None:
+            return {"ok": False, "error": "进程管理器不可用"}
+        try:
+            content, err = pm.get_log(ident, tail=tail)
+            if err:
+                return {"ok": False, "error": err}
+            return {"ok": True, "content": content or ""}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+    @staticmethod
+    def _get_tracker():
+        """安全加载 ChangeTracker（源码/打包两种情形都能拿到）。"""
+        try:
+            import _change_tracker
+            return _change_tracker.get_tracker()
+        except Exception:
+            pass
+        try:
+            import sys as _sys
+            import importlib.util
+            if getattr(_sys, "frozen", False):
+                p = os.path.join(os.path.dirname(_sys.executable), "actions", "_change_tracker.py")
+            else:
+                p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "actions", "_change_tracker.py")
+            spec = importlib.util.spec_from_file_location("_change_tracker", p)
+            mod = importlib.util.module_from_spec(spec)
+            _sys.modules["_change_tracker"] = mod
+            spec.loader.exec_module(mod)
+            return mod.get_tracker()
+        except Exception:
+            return None
+
+    def get_changes(self):
+        """返回本次会话 AI 改动过的文件清单，供前端「变更追踪」面板渲染。"""
+        tr = self._get_tracker()
+        if tr is None:
+            return {"ok": False, "error": "变更追踪器不可用", "changes": []}
+        try:
+            return {"ok": True, "changes": tr.list_changes()}
+        except Exception as e:
+            return {"ok": False, "error": str(e), "changes": []}
+
+    def get_change_diff(self, path):
+        """返回指定文件的 diff（会话初始快照 vs 当前）。"""
+        tr = self._get_tracker()
+        if tr is None:
+            return {"ok": False, "error": "变更追踪器不可用"}
+        try:
+            return tr.get_diff(path)
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def clear_changes(self):
+        """清空本次会话的变更追踪记录。"""
+        tr = self._get_tracker()
+        if tr is None:
+            return {"ok": False, "error": "变更追踪器不可用"}
+        try:
+            tr.clear()
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}

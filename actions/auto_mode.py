@@ -1,8 +1,8 @@
 
 """技能：auto_mode — 自动模式开关（控制流级，运行时拦截）"""
 
-_LB = "\u27ea"
-_RB = "\u27eb"
+_LB = "<"
+_RB = ">"
 _A = _LB + "action"
 _C = _LB + "/action" + _RB
 

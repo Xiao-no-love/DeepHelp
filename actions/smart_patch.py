@@ -11,8 +11,8 @@ except ImportError:
     whatthepatch = None
     _wt_apply = None
 
-_LB = "\u27ea"
-_RB = "\u27eb"
+_LB = "<"
+_RB = ">"
 _DQ = chr(34)
 _A = _LB + "action"
 _C = _LB + "/action" + _RB

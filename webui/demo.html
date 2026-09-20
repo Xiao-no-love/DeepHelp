@@ -276,23 +276,27 @@
             </div>
             <div id="splitter" title="拖动调整宽度"></div>
             <div id="right-col">
-                <div class="side-panel" id="panel-files">
-                    <div class="side-panel-head" data-action="panel-toggle" data-panel="files">
-                        <span class="sp-title"><i class="fa-solid fa-folder-tree"></i> 资源管理器</span>
+                <div id="session-overview" class="session-overview">
+                    <span class="so-item" title="本次会话 AI 改动过的文件数"><i class="fa-solid fa-file-pen"></i><b id="so-files">0</b><span class="so-lbl">文件</span></span>
+                    <span class="so-item" title="本次会话启动的后台服务数"><i class="fa-solid fa-server"></i><b id="so-services">0</b><span class="so-lbl">服务</span></span>
+                    <span class="so-item" title="本次会话执行的动作数"><i class="fa-solid fa-bolt"></i><b id="so-actions">0</b><span class="so-lbl">动作</span></span>
+                </div>
+                <div class="side-panel" id="panel-changes">
+                    <div class="side-panel-head" data-action="panel-toggle" data-panel="changes">
+                        <span class="sp-title"><i class="fa-solid fa-code-compare"></i> 变更追踪 (<span id="changes-count">0</span>)</span>
                         <span class="sp-actions">
-                            <button data-action="fs-refresh" title="刷新"><i class="fa-solid fa-rotate"></i></button>
-                            <button data-action="fs-open-here" title="在资源管理器中打开"><i class="fa-solid fa-folder-open"></i></button>
+                            <button data-action="changes-refresh" title="刷新"><i class="fa-solid fa-rotate"></i></button>
+                            <button data-action="changes-clear" title="清空记录"><i class="fa-solid fa-trash-can"></i></button>
                             <i class="fa-solid fa-chevron-down sp-arrow"></i>
                         </span>
                     </div>
                     <div class="side-panel-body">
-                        <div class="fs-path" id="fs-path"></div>
-                        <div class="fs-list" id="fs-list"></div>
+                        <div class="fs-list" id="changes-list"></div>
                     </div>
                 </div>
-                <div class="side-panel collapsed" id="panel-history">
-                    <div class="side-panel-head" data-action="panel-toggle" data-panel="history">
-                        <span class="sp-title"><i class="fa-solid fa-clock-rotate-left"></i> 技能记录 (<span id="history-count">0</span>)</span>
+                <div class="side-panel collapsed" id="panel-tasks">
+                    <div class="side-panel-head" data-action="panel-toggle" data-panel="tasks">
+                        <span class="sp-title"><i class="fa-solid fa-list-check"></i> 任务进度 (<span id="history-count">0</span>)</span>
                         <span class="sp-actions">
                             <button data-action="clear-history" title="清空记录"><i class="fa-solid fa-trash-can"></i></button>
                             <i class="fa-solid fa-chevron-down sp-arrow"></i>
@@ -300,6 +304,23 @@
                     </div>
                     <div class="side-panel-body">
                         <div class="fs-list" id="side-history-list"></div>
+                    </div>
+                </div>
+                <div class="side-panel collapsed" id="panel-services">
+                    <div class="side-panel-head" data-action="panel-toggle" data-panel="services">
+                        <span class="sp-title"><i class="fa-solid fa-server"></i> 本地服务 (<span id="services-count">0</span>)</span>
+                        <span class="sp-actions">
+                            <button data-action="services-refresh" title="刷新"><i class="fa-solid fa-rotate"></i></button>
+                            <i class="fa-solid fa-chevron-down sp-arrow"></i>
+                        </span>
+                    </div>
+                    <div class="side-panel-body">
+                        <div class="svc-search-wrap">
+                            <i class="fa-solid fa-magnifying-glass"></i>
+                            <input type="text" id="svc-search" placeholder="搜索服务 / 日志关键字" autocomplete="off">
+                            <button data-action="svc-search-clear" title="清除"><i class="fa-solid fa-xmark"></i></button>
+                        </div>
+                        <div class="fs-list" id="services-list"></div>
                     </div>
                 </div>
             </div>

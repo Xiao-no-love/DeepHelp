@@ -42,6 +42,10 @@ DEFAULT_CONFIG = {
     "auto_max_rounds": 5,
     "action_timeout": 120,
     "shell_timeout": 30,
+    "services": {
+        "log_dir": "",
+        "reconcile_interval": 5,
+    },
     "min_send_interval": 15,
     "max_send_interval": 120,
     "background_image": "",
@@ -64,6 +68,9 @@ DEFAULT_CONFIG = {
         "python_reset": ["fa-solid fa-rotate", "重置Python", "#f472b6"],
         "auto_mode": ["fa-solid fa-robot", "自动模式", "#22d3ee"],
         "notice": ["fa-solid fa-bell", "系统通知", "#facc15"],
+        "service_list": ["fa-solid fa-server", "服务列表", "#38bdf8"],
+        "service_stop": ["fa-solid fa-power-off", "停止服务", "#f87171"],
+        "service_log": ["fa-solid fa-file-lines", "服务日志", "#a3e635"],
     },
     "agent": {
         "send_svg": SEND_SVG,

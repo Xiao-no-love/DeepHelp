@@ -10,8 +10,8 @@
 import os
 import re
 
-_LB = "\u27ea"
-_RB = "\u27eb"
+_LB = "<"
+_RB = ">"
 _A = _LB + "action"
 _C = _LB + "/action" + _RB
 

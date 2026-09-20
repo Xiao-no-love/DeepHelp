@@ -39,6 +39,11 @@
         var historyList = document.getElementById('side-history-list');
         var historyCount = document.getElementById('history-count');
         var historyData = [];
+        var changesList = document.getElementById('changes-list');
+        var changesCount = document.getElementById('changes-count');
+        var changesData = [];
+        var changesOpen = null;   // 当前展开 diff 的文件路径
+        var svcSearchTerm = '';   // 服务/日志搜索关键字
         var actionCounter = 0;
         var agentInitialized = false;
         var agentBusy = false;
@@ -58,7 +63,7 @@
                 '<span>命令 ' + commandCount + '</span>';
         }
         // ====== 工具函数 ======
-        function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') }
+        function esc(s) { if (s === null || s === undefined) return ''; return String(s).replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>') }
         function scrollBottom(el) { el.scrollTop = el.scrollHeight }
         function msToStr(ms) { if (ms < 1000) return ms + 'ms'; if (ms < 60000) return (ms / 1000).toFixed(1) + 's'; return (ms / 60000).toFixed(1) + 'min' }
         function showToast(msg) {
@@ -458,6 +463,55 @@
             scrollBottom(chatEl);
             return obj;
         }
+        // ====== 动作三阶段（S3）：start / progress / end ======
+        var _actionCards = {};
+        function addActionStart(obj) {
+            if (!obj || !obj.id) return;
+            var id = obj.id;
+            var meta = obj.type ? { icon: obj.icon || '', label: obj.label || obj.type, color: obj.color || '#8b949e' } : null;
+            var card = document.createElement('div');
+            card.className = 'action-card running';
+            card.id = 'action-' + id;
+            var head = '<div class="action-head">';
+            if (meta) head += '<span class="ah-icon"><i class="' + esc(meta.icon || '') + '"></i></span>';
+            if (meta) head += '<span class="ah-type" style="color:' + esc(meta.color) + '">' + esc(meta.label) + '</span>';
+            head += '<span class="ah-id">#' + esc(id) + '</span>';
+            var pathVal = obj.path || obj.file;
+            if (pathVal) head += '<span class="ah-path" title="' + esc(pathVal) + '">' + esc(pathVal) + '</span>';
+            head += '<span class="ah-summary"><i class="fa-solid fa-spinner fa-spin"></i> 运行中…</span>';
+            head += '<span class="ah-spacer"></span>';
+            head += '<span class="ah-time" id="atime-' + esc(id) + '">0ms</span>';
+            head += '</div>';
+            card.innerHTML = head + '<div class="action-body action-progress" id="aprog-' + esc(id) + '"></div>';
+            chatEl.appendChild(card);
+            scrollBottom(chatEl);
+            var rec = { card: card, t0: Date.now(), timer: null };
+            rec.timer = setInterval(function () {
+                var e = document.getElementById('atime-' + id);
+                if (e) e.textContent = msToStr(Date.now() - rec.t0);
+            }, 200);
+            _actionCards[id] = rec;
+        }
+        function addActionProgress(obj) {
+            if (!obj || !obj.id) return;
+            var el = document.getElementById('aprog-' + obj.id);
+            if (!el) return;
+            var line = document.createElement('div');
+            line.className = 'aprog-line';
+            line.textContent = obj.text || '';
+            el.appendChild(line);
+            while (el.childNodes.length > 200) el.removeChild(el.firstChild);
+            scrollBottom(chatEl);
+        }
+        function addActionEnd(obj) {
+            if (obj && obj.id && _actionCards[obj.id]) {
+                clearInterval(_actionCards[obj.id].timer);
+                var old = document.getElementById('action-' + obj.id);
+                if (old && old.parentNode) old.parentNode.removeChild(old);
+                delete _actionCards[obj.id];
+            }
+            return addAction(obj);
+        }
         function copyOutput(id) {
             var el = document.getElementById('out-' + id);
             if (!el) return;
@@ -485,6 +539,17 @@
             historyData.unshift(obj);
             pruneHistory();
             renderHistory();
+            // 动作完成后自动刷新变更追踪（防抖，避免密集动作刷屏）
+            if (obj && obj.type && obj.files && obj.files.length) scheduleChangesRefresh();
+            updateOverview();
+        }
+        var _chgTimer = null;
+        function scheduleChangesRefresh() {
+            if (_chgTimer) clearTimeout(_chgTimer);
+            _chgTimer = setTimeout(function () {
+                _chgTimer = null;
+                if (window.loadChanges) window.loadChanges();
+            }, 800);
         }
         function histTime(h) {
             var t = Date.parse(h.timestamp || '');
@@ -507,16 +572,21 @@
                 if (h.command) summary = h.command;
                 else if (pathVal || h.summary) summary = (pathVal ? pathVal + ' · ' : '') + (h.summary || '');
                 else summary = h.type || '';
-                var ok = h.returncode === 0 || h.success === true;
+                var ok = (h.returncode === 0 || h.success === true);
                 var statusIcon = ok ? 'fa-check' : 'fa-xmark';
                 var statusColor = ok ? '#34d399' : '#f87171';
                 var dur = h.duration_ms !== undefined ? msToStr(h.duration_ms) : '--';
-                html += '<div class="hist-item" data-hist-idx="' + i + '">';
-                html += '<span class="hi-status" style="color:' + statusColor + '"><i class="fa-solid ' + statusIcon + '"></i></span>';
-                html += '<span class="hi-icon"><i class="' + esc(icon) + '"></i></span>';
-                html += '<span class="hi-type">' + esc(label) + '</span>';
-                html += '<span class="hi-summary" title="' + esc(summary) + '">' + esc(summary) + '</span>';
-                html += '<span class="hi-time">' + esc(histTime(h)) + ' · ' + esc(dur) + '</span>';
+                var isCurrent = (i === 0) && agentBusy;
+                html += '<div class="task-item' + (isCurrent ? ' current' : '') + '" data-hist-idx="' + i + '">';
+                html += '<span class="ti-node" style="color:' + statusColor + '"><i class="fa-solid ' + statusIcon + '"></i></span>';
+                html += '<div class="ti-body">';
+                html += '<div class="ti-line1">';
+                html += '<span class="ti-icon"><i class="' + esc(icon) + '"></i></span>';
+                html += '<span class="ti-type">' + esc(label) + '</span>';
+                html += '<span class="ti-time">' + esc(histTime(h)) + ' · ' + esc(dur) + '</span>';
+                html += '</div>';
+                html += '<div class="ti-summary" title="' + esc(summary) + '">' + esc(summary) + '</div>';
+                html += '</div>';
                 html += '</div>';
                 html += '<div class="hist-detail" id="hist-detail-' + i + '">';
                 html += '<div>时间: ' + esc(h.timestamp || '--') + ' | 耗时: ' + esc(dur) + '</div>';
@@ -535,7 +605,7 @@
                 else if (h.summary) html += '<div>结果: ' + esc(h.summary) + '</div>';
                 html += '</div>';
             }
-            if (historyList) historyList.innerHTML = html || '<div class="fs-empty"><i class="fa-solid fa-inbox"></i> 暂无记录</div>';
+            if (historyList) historyList.innerHTML = html || '<div class="fs-empty"><i class="fa-solid fa-inbox"></i> 暂无任务</div>';
         }
         function toggleHistoryDetail(i) {
             var el = document.getElementById('hist-detail-' + i);
@@ -544,6 +614,79 @@
         function clearHistory() {
             historyData = [];
             renderHistory();
+        }
+        // ====== 变更追踪面板 ======
+        function changeStatusMeta(st) {
+            if (st === 'created') return { cls: 'created', text: '新增', icon: 'fa-plus' };
+            if (st === 'deleted') return { cls: 'deleted', text: '删除', icon: 'fa-trash-can' };
+            return { cls: 'modified', text: '改', icon: 'fa-pen' };
+        }
+        function changeShortPath(p) {
+            if (!p) return '';
+            var parts = p.replace(/\\/g, '/').split('/');
+            return parts.length <= 2 ? p : '…/' + parts.slice(-2).join('/');
+        }
+        function loadChanges() {
+            if (!window.pywebview || !window.pywebview.api) return;
+            window.pywebview.api.get_changes().then(function (res) {
+                if (!res || !res.ok) {
+                    if (changesList) changesList.innerHTML = '<div class="fs-empty">' + esc((res && res.error) || '获取失败') + '</div>';
+                    return;
+                }
+                changesData = res.changes || [];
+                renderChanges();
+                updateOverview();
+            });
+        }
+        function renderChanges() {
+            if (changesCount) changesCount.textContent = changesData.length;
+            if (!changesList) return;
+            var html = '';
+            for (var i = 0; i < changesData.length; i++) {
+                var c = changesData[i];
+                var m = changeStatusMeta(c.status);
+                var acts = (c.actions || []).join(', ');
+                html += '<div class="chg-item" data-change-path="' + esc(c.path) + '">';
+                html += '<span class="chg-badge ' + m.cls + '"><i class="fa-solid ' + m.icon + '"></i> ' + m.text + '</span>';
+                html += '<div class="chg-main">';
+                html += '<div class="chg-name" title="' + esc(c.path) + '">' + esc(changeShortPath(c.path)) + '</div>';
+                html += '<div class="chg-meta">' + esc(c.ops) + ' 次操作 · ' + esc(acts) + '</div>';
+                html += '</div>';
+                html += '<span class="chg-chev"><i class="fa-solid fa-chevron-right"></i></span>';
+                html += '</div>';
+                html += '<div class="chg-diff" id="chg-diff-' + i + '"></div>';
+            }
+            changesList.innerHTML = html || '<div class="fs-empty"><i class="fa-solid fa-check"></i> 本次会话尚未改动文件</div>';
+        }
+        function toggleChangeDiff(path) {
+            if (!path || !window.pywebview || !window.pywebview.api) return;
+            var idx = -1;
+            for (var i = 0; i < changesData.length; i++) { if (changesData[i].path === path) { idx = i; break; } }
+            if (idx < 0) return;
+            var el = document.getElementById('chg-diff-' + idx);
+            if (!el) return;
+            if (changesOpen === path && el.classList.contains('show')) {
+                el.classList.remove('show'); changesOpen = null; return;
+            }
+            window.pywebview.api.get_change_diff(path).then(function (res) {
+                if (!res || !res.ok) { showToast('读取 diff 失败: ' + ((res && res.error) || '')); return; }
+                el.textContent = res.diff || '(无差异)';
+                el.classList.add('show');
+                changesOpen = path;
+            });
+        }
+        function clearChanges() {
+            if (!window.pywebview || !window.pywebview.api) return;
+            window.pywebview.api.clear_changes().then(function () {
+                changesData = []; changesOpen = null; renderChanges(); updateOverview();
+                showToast('变更记录已清空');
+            });
+        }
+        // ====== 会话概览 ======
+        function updateOverview() {
+            var f = document.getElementById('so-files'); if (f) f.textContent = changesData.length;
+            var s = document.getElementById('so-services'); if (s) s.textContent = (window._svcAlive != null ? window._svcAlive : 0);
+            var a = document.getElementById('so-actions'); if (a) a.textContent = historyData.length;
         }
         function clearChat() {
             chatEl.innerHTML = '';
@@ -797,6 +940,9 @@
             if (window.pywebview && window.pywebview.api) {
                 window.pywebview.api.startup().then(function () {
                     if (window.fsLoad) window.fsLoad(null);
+                    if (window.loadServices) window.loadServices();
+                    if (window.loadChanges) window.loadChanges();
+                    if (window.updateOverview) window.updateOverview();
                 });
             }
         });
@@ -804,8 +950,15 @@
         if (window.pywebview && window.pywebview.api && window.pywebview.api.startup) {
             window.pywebview.api.startup().then(function () {
                 if (window.fsLoad) window.fsLoad(null);
+                if (window.loadServices) window.loadServices();
+                if (window.loadChanges) window.loadChanges();
+                if (window.updateOverview) window.updateOverview();
             });
         }
+        // 本地服务面板：每 5 秒自动刷新一次
+        setInterval(function () {
+            if (window.loadServices) window.loadServices();
+        }, 5000);
         // ====== 自动模式 & 消息排队 UI ======
         // 状态：由后端 setStatus 推送 auto_mode/auto_round/auto_max 驱动
         function setAutoMode(info) {
@@ -936,41 +1089,8 @@
             if (!filePath) return;
             var norm = filePath.replace(/\\/g, '/');
             var dir = norm.substring(0, norm.lastIndexOf('/'));
-            var name = norm.substring(norm.lastIndexOf('/') + 1);
-            if (!dir) { dir = norm; name = ''; }
-            if (!window.pywebview || !window.pywebview.api) return;
-            window.pywebview.api.list_dir(dir).then(function (res) {
-                if (!res || !res.ok) { showToast('定位失败: ' + ((res && res.error) || '')); return; }
-                fsCurrentPath = res.path;
-                var pEl = document.getElementById('fs-path');
-                if (pEl) { pEl.textContent = res.path; pEl.title = res.path; }
-                var listEl = document.getElementById('fs-list');
-                if (!listEl) return;
-                var html = '';
-                if (res.parent) {
-                    html += '<div class="fs-item" data-fs-dir="' + esc(res.parent.replace(/\\/g, '/')) + '">'
-                        + '<span class="fs-item-icon dir"><i class="fa-solid fa-arrow-up"></i></span>'
-                        + '<span class="fs-item-name">..</span></div>';
-                }
-                for (var i = 0; i < res.entries.length; i++) {
-                    var e = res.entries[i];
-                    var full = (res.path + '\\' + e.name).replace(/\\/g, '/');
-                    var icon = e.dir ? 'fa-folder' : fsFileIcon(e.name);
-                    var cls = e.dir ? 'dir' : 'file';
-                    var hit = (name && e.name === name);
-                    html += '<div class="fs-item' + (hit ? ' reveal-hit' : '') + '" data-fs-' + (e.dir ? 'dir' : 'file') + '="' + esc(full) + '">'
-                        + '<span class="fs-item-icon ' + cls + '"><i class="fa-solid ' + icon + '"></i></span>'
-                        + '<span class="fs-item-name">' + esc(e.name) + '</span>'
-                        + (e.dir ? '' : '<span class="fs-item-size">' + fsFmtSize(e.size) + '</span>')
-                        + '</div>';
-                }
-                listEl.innerHTML = html || '<div class="fs-empty">空目录</div>';
-                // 展开资源管理器面板并滚动到高亮项
-                var pf = document.getElementById('panel-files');
-                if (pf) pf.classList.remove('collapsed');
-                var hitEl = listEl.querySelector('.reveal-hit');
-                if (hitEl && hitEl.scrollIntoView) hitEl.scrollIntoView({ block: 'center' });
-            });
+            if (!dir) dir = norm;
+            if (window.pywebview && window.pywebview.api) window.pywebview.api.open_in_explorer(dir);
         }
         // ====== 工作区切换提示 ======
         var wdPending = null;
@@ -1046,7 +1166,7 @@
             var rc = document.getElementById('right-col');
             var isRow = rc && rc.classList.contains('row-layout');
             if (!me.classList.contains('collapsed')) {
-                // 并排模式下允许两个都折叠；堆叠模式下至少留一个展开
+                // 并排模式下允许都折叠；堆叠模式下至少留一个展开
                 if (!isRow) {
                     var anyOpen = document.querySelector('#right-col .side-panel:not(.collapsed)');
                     if (anyOpen === me) { me.classList.add('collapsed'); return; }
@@ -1054,11 +1174,15 @@
                 me.classList.add('collapsed');
             } else {
                 me.classList.remove('collapsed');
-                // 仅堆叠模式：展开一个时折叠另一个
+                // 仅堆叠模式：展开一个时折叠其余所有
                 if (!isRow) {
-                    var other = document.getElementById('panel-' + (p === 'files' ? 'history' : 'files'));
-                    if (other) other.classList.add('collapsed');
+                    var panels = document.querySelectorAll('#right-col .side-panel');
+                    for (var i = 0; i < panels.length; i++) {
+                        if (panels[i] !== me) panels[i].classList.add('collapsed');
+                    }
                 }
+                if (p === 'services') loadServices();
+                if (p === 'changes') loadChanges();
             }
         }
         function applyRightLayout() {
@@ -1067,19 +1191,134 @@
             var wide = rc.getBoundingClientRect().width > 700;
             var wasRow = rc.classList.contains('row-layout');
             rc.classList.toggle('row-layout', wide);
-            // 进入并排：两个面板都展开
+            // 进入并排：所有面板都展开
             if (wide && !wasRow) {
-                var pf = document.getElementById('panel-files');
-                var ph = document.getElementById('panel-history');
-                if (pf) pf.classList.remove('collapsed');
-                if (ph) ph.classList.remove('collapsed');
+                var panels = document.querySelectorAll('#right-col .side-panel');
+                for (var i = 0; i < panels.length; i++) panels[i].classList.remove('collapsed');
             }
         }
+        // ====== 本地服务面板 ======
+        var svcLogTarget = null;
+        function svcFmtUptime(sec) {
+            sec = Math.floor(sec || 0);
+            if (sec < 60) return sec + 's';
+            if (sec < 3600) return Math.floor(sec / 60) + 'm' + (sec % 60) + 's';
+            return Math.floor(sec / 3600) + 'h' + Math.floor((sec % 3600) / 60) + 'm';
+        }
+        function svcHighlight(text) {
+            var out = esc(text);
+            if (!svcSearchTerm) return out;
+            try {
+                var re = new RegExp('(' + svcSearchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
+                return out.replace(re, '<mark class="svc-hit">$1</mark>');
+            } catch (e) { return out; }
+        }
+        function loadServices() {
+            if (!window.pywebview || !window.pywebview.api) return;
+            window.pywebview.api.list_services().then(function (res) {
+                var listEl = document.getElementById('services-list');
+                var cntEl = document.getElementById('services-count');
+                if (!listEl) return;
+                if (!res || !res.ok) {
+                    listEl.innerHTML = '<div class="fs-empty">' + esc((res && res.error) || '获取失败') + '</div>';
+                    if (cntEl) cntEl.textContent = '0';
+                    return;
+                }
+                var items = res.services || [];
+                var aliveN = 0;
+                var html = '';
+                var q = (svcSearchTerm || '').toLowerCase();
+                for (var i = 0; i < items.length; i++) {
+                    var s = items[i];
+                    if (s.alive) aliveN++;
+                    if (q) {
+                        var hay = ((s.name || '') + ' ' + (s.id || '') + ' ' + (s.cmd || '')).toLowerCase();
+                        if (hay.indexOf(q) < 0) continue;
+                    }
+                    var dot = s.alive ? 'on' : 'off';
+                    html += '<div class="svc-card" data-svc-id="' + esc(s.id) + '">'
+                        + '<div class="svc-row1">'
+                        + '<span class="svc-dot ' + dot + '"></span>'
+                        + '<span class="svc-name">' + esc(s.name || s.id) + '</span>'
+                        + '<span class="svc-pid">pid ' + s.pid + '</span>'
+                        + '</div>'
+                        + '<div class="svc-cmd" title="' + esc(s.cmd) + '">' + esc(s.cmd) + '</div>'
+                        + '<div class="svc-row2">'
+                        + '<span class="svc-uptime"><i class="fa-regular fa-clock"></i> ' + svcFmtUptime(s.uptime_sec) + '</span>'
+                        + '<span class="svc-btns">'
+                        + '<button data-action="svc-log" data-id="' + esc(s.id) + '" title="查看日志"><i class="fa-solid fa-file-lines"></i></button>'
+                        + '<button data-action="svc-stop" data-id="' + esc(s.id) + '" title="停止"' + (s.alive ? '' : ' disabled') + '><i class="fa-solid fa-power-off"></i></button>'
+                        + '</span>'
+                        + '</div>'
+                        + '<pre class="svc-log" id="svc-log-' + esc(s.id) + '"></pre>'
+                        + '</div>';
+                }
+                listEl.innerHTML = html || '<div class="fs-empty">' + (q ? '无匹配服务' : '暂无托管服务') + '</div>';
+                if (cntEl) cntEl.textContent = String(aliveN);
+                window._svcAlive = aliveN;
+                updateOverview();
+                // 修复：重建后恢复已展开的日志（否则5秒轮询会冲掉展开状态）
+                if (svcLogTarget) {
+                    var stillThere = false;
+                    for (var j = 0; j < items.length; j++) { if (items[j].id === svcLogTarget) { stillThere = true; break; } }
+                    if (stillThere) {
+                        (function (tid) {
+                            var el2 = document.getElementById('svc-log-' + tid);
+                            if (!el2) return;
+                            window.pywebview.api.service_log(tid, 60).then(function (r) {
+                                if (r && r.ok) {
+                                    var cur = document.getElementById('svc-log-' + tid);
+                                    if (cur) { cur.innerHTML = svcHighlight(r.content || '(无输出)'); cur.classList.add('show'); cur.scrollTop = cur.scrollHeight; }
+                                }
+                            });
+                        })(svcLogTarget);
+                    } else {
+                        svcLogTarget = null;
+                    }
+                }
+            });
+        }
+        function servicesRefresh() { loadServices(); }
+        function svcStop(id) {
+            if (!id || !window.pywebview || !window.pywebview.api) return;
+            window.pywebview.api.stop_service(id).then(function (res) {
+                if (res && res.ok) { showToast('服务已停止'); }
+                else { showToast('停止失败: ' + ((res && (res.error || res.msg)) || '')); }
+                loadServices();
+            });
+        }
+        function svcLog(id) {
+            if (!id || !window.pywebview || !window.pywebview.api) return;
+            var el = document.getElementById('svc-log-' + id);
+            if (!el) return;
+            if (svcLogTarget === id && el.classList.contains('show')) {
+                el.classList.remove('show');
+                svcLogTarget = null;
+                return;
+            }
+            window.pywebview.api.service_log(id, 60).then(function (res) {
+                if (!res || !res.ok) { showToast('读取日志失败: ' + ((res && res.error) || '')); return; }
+                el.innerHTML = svcHighlight(res.content || '(无输出)');
+                el.classList.add('show');
+                svcLogTarget = id;
+                el.scrollTop = el.scrollHeight;
+            });
+        }
+        window.loadServices = loadServices;
+        window.addActionStart = addActionStart;
+        window.addActionProgress = addActionProgress;
+        window.addActionEnd = addActionEnd;
+        window.servicesRefresh = servicesRefresh;
         window.fsLoad = fsLoad;
         window.fsRefresh = fsRefresh;
         window.fsOpenHere = fsOpenHere;
         window.fsOpenFile = fsOpenFile;
         window.fsReveal = fsReveal;
+        window.loadChanges = loadChanges;
+        window.changesRefresh = loadChanges;
+        window.toggleChangeDiff = toggleChangeDiff;
+        window.clearChanges = clearChanges;
+        window.updateOverview = updateOverview;
         window.fvClose = fvClose;
         window.fvOpenExplorer = fvOpenExplorer;
         window.panelToggle = panelToggle;
@@ -1112,6 +1351,17 @@
         'panel-toggle': function (el) { panelToggle(el); },
         'fs-refresh': function () { fsRefresh(); },
         'fs-open-here': function () { fsOpenHere(); },
+        'services-refresh': function () { servicesRefresh(); },
+        'changes-refresh': function () { loadChanges(); },
+        'changes-clear': function () { clearChanges(); },
+        'svc-search-clear': function () {
+            var inp = document.getElementById('svc-search');
+            if (inp) inp.value = '';
+            svcSearchTerm = '';
+            loadServices();
+        },
+        'svc-stop': function (el) { svcStop(el.getAttribute('data-id')); },
+        'svc-log': function (el) { svcLog(el.getAttribute('data-id')); },
         'fv-close': function () { fvClose(); },
         'fv-open': function () { fvOpenExplorer(); },
         'workdir-accept': function () { workdirAccept(); },
@@ -1133,6 +1383,8 @@
             fsReveal(histFile.getAttribute('data-hist-file'));
             return;
         }
+        var chgItem = e.target.closest('[data-change-path]');
+        if (chgItem) { toggleChangeDiff(chgItem.getAttribute('data-change-path')); return; }
         var histItem = e.target.closest('[data-hist-idx]');
         if (histItem) { toggleHistoryDetail(parseInt(histItem.getAttribute('data-hist-idx'), 10)); return; }
         var fsDir = e.target.closest('[data-fs-dir]');
@@ -1144,6 +1396,15 @@
         var fn = actions[el.getAttribute('data-action')];
         if (fn) fn(el);
     });
+
+    // 服务/日志搜索框：输入时重新渲染（含高亮）
+    var svcSearchInput = document.getElementById('svc-search');
+    if (svcSearchInput) {
+        svcSearchInput.addEventListener('input', function () {
+            svcSearchTerm = this.value.trim();
+            loadServices();
+        });
+    }
 
     // 背景图片输入：变更时应用并同步后端
     var bgInput = document.getElementById('cfg-background');

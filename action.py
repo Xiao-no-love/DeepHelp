@@ -20,8 +20,8 @@ from typing import Optional, Tuple, Dict, Any, List
 # actions/*.py 是运行时动态加载的，PyInstaller 静态分析看不到其中的 import，故在此统一声明。
 import whatthepatch  # noqa: F401  (actions/smart_patch.py 依赖)
 
-_LB = "\u27ea"
-_RB = "\u27eb"
+_LB = "<"
+_RB = ">"
 _AMP = chr(38)
 _SEMI = chr(59)
 _OPEN = _LB + "action"
@@ -396,12 +396,11 @@ _C = _LB + "/action" + _RB
 _A = _LB + "action"
 
 _PROTOCOL_HEAD = (
-    "当你需要执行操作时，必须严格遵循使用如下定界符包裹动作，"
+    "当你需要执行操作时，必须严格遵循使用如下完整的XML闭合标签形式包裹动作，"
     "系统会自动解析并返回执行结果：\n"
     + _A + ' type="动作类型" id="唯一标识符" 参数="值"' + _RB + "\n"
     + "动作内容或代码\n"
     + _C + "\n"
-    + "（定界符为 ⟪ ⟫，正文无需任何转义）\n"
     + "【可用动作类型及参数说明】\n"
 )
 
@@ -411,9 +410,9 @@ _PROTOCOL_TAIL = (
     + "  · " + 'replay="true"' + "（默认，可省略）：执行结果会以 [工具输出] 形式返回给你，你能看到结果并据此决定下一步。\n"
     + "  · " + 'replay="false"' + "：执行结果不返回给你，仅用于无需查看结果的纯副作用操作。\n"
     + "默认即回传，因此绝大多数操作**无需显式写 replay**。仅当你确定某步结果无需查看（且不会影响后续判断）时，才写 replay=\"false\"。\n"
-    + "【书写规则（已大幅简化）】\n"
-    + "body 内容请原样书写——正文里出现尖括号、" + _LB + " " + _RB + "、乃至旧式 action 标签字样，都无需转义，不会误判。\n"
-    + "（仅当正文出现完整的 " + _C + " 新闭合定界符时才会被当作标签结束，正常写代码几乎不会遇到。）\n"
+    + "【XML 实体转义规则（已简化，务必记牢）】\n"
+    + "body 内容请原样书写，< > & 引号等字符通常都无需转义。\n"
+    + "唯一例外：若 body 里出现完整的 action 闭合标签序列，必须把尖括号转义成实体，否则会被误判为标签结束。\n"
     + "【工具选择指引】\n"
     + "- 改文件前，先 file_read 拿到确切内容与行号。\n"
     + "- 改一两行 / 删除若干行 → replace_lines（按行号，最稳）。\n"
@@ -461,6 +460,25 @@ def build_tool_protocol(registry: Dict = None) -> str:
 
 
 # ========== 主入口 ==========
+def _load_change_tracker():
+    """加载 _change_tracker 内部模块（优先 sys.modules，其次按文件路径加载）。"""
+    if "_change_tracker" in sys.modules:
+        return sys.modules["_change_tracker"]
+    try:
+        return importlib.import_module("_change_tracker")
+    except Exception:
+        pass
+    try:
+        path = os.path.join(ACTIONS_DIR, "_change_tracker.py")
+        spec = importlib.util.spec_from_file_location("_change_tracker", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        sys.modules["_change_tracker"] = mod
+        return mod
+    except Exception:
+        return None
+
+
 def execute_action(
     type_: str,
     id_: Optional[str],
@@ -515,6 +533,18 @@ def execute_action(
     pdict = _parse_attrs(params or "")
     ctx = Context(work_dir=work_dir, shell_timeout=shell_timeout)
 
+    # 变更追踪：文件类动作执行前拍快照
+    _tracker = _load_change_tracker()
+    _trk_snap = None
+    _trk_abs = ""
+    if _tracker is not None:
+        _raw = pdict.get("file") or pdict.get("path") or pdict.get("file_path")
+        if _raw:
+            try:
+                _trk_abs = ctx.resolve_path(_raw)
+                _trk_snap = _tracker.get_tracker().before(type_, _trk_abs)
+            except Exception:
+                _trk_snap = None
     try:
         result = item["run"](ctx, pdict, body)
         if not isinstance(result, dict):
@@ -525,6 +555,11 @@ def execute_action(
         _finish(success, result.get("summary", ""), result.get("error"), **result.get("info", {}))
         fb = '[action id="' + str(id_) + '"] ' + fb_body
         _audit_log(type_, id_, params, fb, success, info["duration_ms"])
+        if _tracker is not None and _trk_snap is not None:
+            try:
+                _tracker.get_tracker().after(type_, _trk_abs, _trk_snap, success)
+            except Exception:
+                pass
         return success, fb, info
     except subprocess.TimeoutExpired as e:
         _finish(False, "超时", "执行超时 (" + str(e.timeout) + "s)")
