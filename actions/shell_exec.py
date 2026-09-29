@@ -78,6 +78,9 @@ def _build_env():
     env = os.environ.copy()
     if os.name == "nt":
         env["PATH"] = r"C:\Windows\System32;C:\Windows;" + env.get("PATH", "")
+    # 强制 Python 子进程用 UTF-8 输出：避免中文/emoji 在 GBK 控制台乱码或 UnicodeEncodeError
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
     return env
 
 
@@ -132,22 +135,45 @@ def run(ctx, params, body):
     cwd = ctx.resolve_path(cwd) if cwd else os.getcwd()
     env = _build_env()
 
+    def _kill_tree(pid):
+        """杀掉进程树：Windows 用 taskkill /T /F，其它平台尝试进程组。"""
+        try:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                               capture_output=True, timeout=15)
+            else:
+                import signal as _sig
+                os.killpg(os.getpgid(pid), _sig.SIGKILL)
+        except Exception:
+            try:
+                os.kill(pid, 9)
+            except Exception:
+                pass
+
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             cmd, shell=True, cwd=cwd, env=env,
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         )
-    except subprocess.TimeoutExpired as e:
-        return {"success": False, "summary": "执行超时 (" + str(timeout) + "s)",
-                "error": "执行超时",
-                "feedback": "Shell 执行超时 (" + str(timeout) + "s)，已放弃等待。\n"
-                            "提示：长驻服务请改用 background=\"true\"。"}
     except Exception as e:
         return {"success": False, "summary": "执行异常", "error": str(e),
                 "feedback": "Shell 执行异常: " + str(e)}
 
-    raw = proc.stdout if proc.stdout is not None else b""
+    try:
+        raw, _ = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc.pid)
+        try:
+            proc.communicate(timeout=5)
+        except Exception:
+            pass
+        return {"success": False, "summary": "执行超时 (" + str(timeout) + "s)",
+                "error": "执行超时",
+                "feedback": "Shell 执行超时 (" + str(timeout) + "s)，已终止进程树。\n"
+                            "提示：长驻服务请改用 background=\"true\"。"}
+
+    raw = raw if raw is not None else b""
     out = ""
     for enc in ("utf-8", "gbk"):
         try:

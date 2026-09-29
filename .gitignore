@@ -28,3 +28,6 @@ config.local.json
 .DS_Store
 # AI 运行时生成（含本机人设/经验笔记与本地路径）
 prompt.json
+# 运行时产物 / 备份（勿入库）
+service_logs/
+_backup_*/

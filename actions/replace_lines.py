@@ -108,6 +108,12 @@ def run(ctx, params, body):
     with open(abs_path, "r", encoding="utf-8", newline="") as f:
         original_full = f.read()
     original_lines = original_full.splitlines()
+    if "\r\n" in original_full:
+        eol = "\r\n"
+    elif "\r" in original_full:
+        eol = "\r"
+    else:
+        eol = "\n"
     has_trailing_newline = original_full.endswith("\n")
     total = len(original_lines)
 
@@ -165,9 +171,9 @@ def run(ctx, params, body):
         result[s - 1:e] = sg["content"]
     removed_all.sort(key=lambda x: x[0])  # 回显按行号正序
 
-    new_text = "\n".join(result)
+    new_text = eol.join(result)
     if has_trailing_newline:
-        new_text += "\n"
+        new_text += eol
 
     # ---- 写入 + 校验 + 回滚 ----
     applied = False

@@ -108,19 +108,7 @@ def deep_merge(base, override):
         else:
             result[k] = v
     return result
-# ========== 动作元数据 ==========
-ACTION_META = {
-    "python": ("fa-brands fa-python", "Python", "#c084fc"),
-    "shell": ("fa-solid fa-terminal", "Shell", "#fbbf24"),
-    "file_read": ("fa-solid fa-book-open", "读取文件", "#34d399"),
-    "file_write": ("fa-solid fa-pen-to-square", "写入文件", "#f97316"),
-    "file_append": ("fa-solid fa-file-circle-plus", "追加文件", "#fb923c"),
-    "file_delete": ("fa-solid fa-trash-can", "删除文件", "#f87171"),
-    "smart_patch": ("fa-solid fa-wand-magic-sparkles", "智能补丁", "#a78bfa"),
-    "replace_lines": ("fa-solid fa-scissors", "行替换", "#38bdf8"),
-    "dir_list": ("fa-solid fa-folder-tree", "目录列表", "#9ca3af"),
-    "python_reset": ("fa-solid fa-rotate", "重置Python", "#f472b6"),
-}
+# （已移除死代码 ACTION_META：全项目零引用，动作元数据统一由 DEFAULT_CONFIG["action_meta"] 提供）
 
 
 

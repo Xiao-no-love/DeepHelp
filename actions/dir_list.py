@@ -46,10 +46,13 @@ def run(ctx, params, body):
         detailed.append("[DIR]  " + d + "/")
     for fname in files:
         full = os.path.join(target, fname)
-        size = os.path.getsize(full)
+        try:
+            size = os.path.getsize(full)
+        except Exception:
+            size = 0   # 文件可能已被删除/被占用
         detailed.append("[FILE] " + fname + "  " + ctx.format_size(size))
-    output = "\n".join(detailed) if detailed else "(空目录)"
 
+    output = "\n".join(detailed)
     return {
         "success": True,
         "summary": str(len(dirs)) + " 个目录, " + str(len(files)) + " 个文件",

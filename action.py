@@ -42,6 +42,7 @@ ACTIONS_DIR = _external_actions if os.path.isdir(_external_actions) else os.path
 AUDIT_LOG_PATH = os.path.join(_RUNTIME_DIR, "audit.log")
 DEFAULT_MAX_READ_CHARS = 10000
 DEFAULT_SHELL_TIMEOUT = 30
+_RESERVED_ATTRS = {"type", "id", "replay"}
 
 
 def _ent(name):
@@ -97,8 +98,80 @@ def _parse_attrs(header: str) -> Dict[str, str]:
             v = m.group(4)
         out[k] = unescape_xml(v)
     return out
+# ---- 动作类型归一化（容错：type/name 混用、拼写/大小写差异）----
+_TYPE_ALIAS_KEYS = ("type", "Type", "TYPE", "typ", "ty")
 
 
+def _all_known_types():
+    try:
+        return list(get_registry().keys())
+    except Exception:
+        return []
+
+
+def _normalize_type_value(raw, known):
+    """把 raw 归一化为 known 里的规范名；无法确定返回 None。known 为空则宽松放行。"""
+    if not raw:
+        return None
+    raw = str(raw).strip()
+    if not known:
+        return raw
+    if raw in known:
+        return raw
+    low = raw.lower()
+    for k in known:
+        if k.lower() == low:
+            return k
+    norm = low.replace("-", "_")
+    for k in known:
+        if k.lower().replace("-", "_") == norm:
+            return k
+    import difflib
+    m = difflib.get_close_matches(low, [k.lower() for k in known], n=1, cutoff=0.8)
+    if m:
+        for k in known:
+            if k.lower() == m[0]:
+                return k
+    return None
+
+
+def _suggest_type(raw):
+    """给一个拼错/记错的类型名找最接近的已注册类型，找不到返回空串。"""
+    known = _all_known_types()
+    if not known or not raw:
+        return ""
+    import difflib
+    m = difflib.get_close_matches(str(raw).lower(), [k.lower() for k in known], n=1, cutoff=0.6)
+    if m:
+        for k in known:
+            if k.lower() == m[0]:
+                return k
+    return ""
+
+
+def _resolve_type(attrs):
+    """从属性里解析动作类型，返回 (规范type 或 None, 诊断/容错提示 或 None)。
+    第一轮认 type 系键（允许大小写/拼写模糊）；第二轮才用 name/action 兜底（仅精确匹配，
+    避免把普通同名参数误当类型）。"""
+    for key in _TYPE_ALIAS_KEYS:
+        v = attrs.get(key)
+        if v:
+            known = _all_known_types()
+            norm = _normalize_type_value(v, known)
+            if norm is None:
+                sug = _suggest_type(v)
+                msg = "属性 " + key + '="' + str(v) + '" 不是已知动作类型'
+                if sug:
+                    msg += "，你是不是想用 " + sug + " ？"
+                return None, msg
+            if key != "type" or norm != v:
+                return norm, "属性 " + key + '="' + str(v) + '" 已容错识别为 type="' + norm + '"'
+            return norm, None
+    for key in ("name", "action"):
+        v = attrs.get(key)
+        if v and v in _all_known_types():
+            return v, "属性 " + key + '="' + str(v) + '" 已容错识别为 type（建议写成 type）'
+    return None, None
 def _find_close(text: str, start: int) -> int:
     i = start
     n = len(text)
@@ -141,8 +214,10 @@ def parse_actions(text: str) -> List[Tuple[str, Optional[str], str, str]]:
             pos = start + 1
             continue
         attrs = _parse_attrs(text[after:he])
-        t = attrs.get("type")
+        t, _tw = _resolve_type(attrs)
         if t is None:
+            if _tw:
+                _audit_log("(malformed)", attrs.get("id"), text[after:he], _tw, False, 0)
             pos = he + 1
             continue
         ci = _find_close(text, he + 1)
@@ -215,10 +290,15 @@ def parse_segments(text: str) -> List[Tuple[str, Any]]:
             segs.append(("text", text[pos:]))
             break
         attrs = _parse_attrs(text[after:he])
-        t = attrs.get("type")
+        t, _tw = _resolve_type(attrs)
         if t is None:
-            segs.append(("text", text[pos:he + 1]))
-            pos = he + 1
+            if _tw:
+                _ci = _find_close(text, he + 1)
+                segs.append(("text", text[pos:start] + "⚠️ 动作未执行：" + _tw))
+                pos = (_ci + clen) if _ci != -1 else (he + 1)
+            else:
+                segs.append(("text", text[pos:he + 1]))
+                pos = he + 1
             continue
         ci = _find_close(text, he + 1)
         if ci == -1:
@@ -264,6 +344,9 @@ def get_param_bool(params_str: str, key: str, default: bool = False) -> bool:
 
 
 # ========== 审计 ==========
+_AUDIT_MAX_BYTES = 5 * 1024 * 1024  # 单文件上限 5MB，超过则截断保留后半
+
+
 def _audit_log(action_type, action_id, params, result, success, duration_ms):
     try:
         entry = {
@@ -272,6 +355,18 @@ def _audit_log(action_type, action_id, params, result, success, duration_ms):
             "result": (result or "")[:500], "success": success,
             "duration_ms": duration_ms,
         }
+        # 日志轮转：超过上限时只保留后半，避免 audit.log 无限膨胀
+        try:
+            if os.path.exists(AUDIT_LOG_PATH) and os.path.getsize(AUDIT_LOG_PATH) > _AUDIT_MAX_BYTES:
+                # 用二进制 seek（字节偏移），文本模式 seek 传字节数可能抛异常导致轮转失效
+                size = os.path.getsize(AUDIT_LOG_PATH)
+                with open(AUDIT_LOG_PATH, "rb") as f:
+                    f.seek(max(0, size - _AUDIT_MAX_BYTES // 2))
+                    tail = f.read()
+                with open(AUDIT_LOG_PATH, "wb") as f:
+                    f.write(tail)
+        except Exception:
+            pass
         with open(AUDIT_LOG_PATH, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except Exception:
@@ -279,8 +374,30 @@ def _audit_log(action_type, action_id, params, result, success, duration_ms):
 
 
 # ========== Python 执行器 ==========
+# 说明：python 动作在宿主进程内 exec（与 pywebview/tkinter 同进程）。因此：
+#   - 不做"正则危险扫描拦截"（实测既误伤正常代码、又能被 getattr 轻易绕过，是安全剧场）。
+#   - 改为：① 精确捕获 ModuleNotFoundError，给出可行动提示；② 执行加超时兜底；
+#   - 注入 available()/list_available() 辅助，让 AI 先查库再用，避免试错。
+import re as _re
+import threading as _threading
+import importlib as _importlib
+
+# 打包环境显式带入的基础库（与 deephelp.spec 的 hiddenimports 保持一致）。
+# 仅用于向 AI 说明"哪些库无需试错即可用"，非硬约束。
+_BUNDLED_LIBS = ["json", "os", "sys", "re", "time", "datetime", "math", "random",
+                 "collections", "itertools", "functools", "pathlib", "glob",
+                 "hashlib", "base64", "csv", "io", "subprocess", "shutil", "tempfile",
+                 "urllib", "http", "socket", "threading", "queue", "traceback",
+                 "requests", "bs4", "yaml", "dateutil", "psutil", "pyperclip",
+                 "whatthepatch", "prompt"]
+
+# 串行化 python 执行：防止超时残留线程与后续执行互相覆盖 sys.stdout
+_EXEC_LOCK = _threading.Lock()
+
+
 class PythonExecutor:
     _instance = None
+    _runaway = 0   # 累计超时失控次数（供排查）
 
     def __new__(cls):
         if cls._instance is None:
@@ -289,23 +406,85 @@ class PythonExecutor:
         return cls._instance
 
     def _init(self):
-        self.globals = {"__builtins__": __builtins__}
         self.last_output = ""
+        self.timeout = 30  # 秒；可由 config 覆盖
+        self.globals = self._build_globals()
+
+    def _build_globals(self):
+        g = {"__builtins__": __builtins__}
+        # 注入库可用性辅助（无害，供 AI 先查后用）
+        g["available"] = self._available
+        g["list_available"] = self._list_available
+        return g
+
+    @staticmethod
+    def _available(module_name):
+        """判断某模块在当前运行环境是否可导入（不实际导入）。"""
+        try:
+            spec = _importlib.util.find_spec(str(module_name))
+            return spec is not None
+        except Exception:
+            return False
+
+    @staticmethod
+    def _list_available():
+        """返回打包显式带入的基础库清单。"""
+        return list(_BUNDLED_LIBS)
 
     def execute(self, code: str) -> Tuple[str, Optional[str]]:
         stdout = io.StringIO()
-        old = sys.stdout
-        sys.stdout = stdout
-        try:
-            exec(code, self.globals, self.globals)
-            return stdout.getvalue(), None
-        except Exception as e:
-            return stdout.getvalue(), str(e)
-        finally:
-            sys.stdout = old
+        stderr = io.StringIO()
+        result = {"err": None, "mod_err": None}
+
+        def _run():
+            try:
+                exec(code, self.globals, self.globals)
+            except ModuleNotFoundError as e:
+                result["mod_err"] = getattr(e, "name", None) or str(e)
+            except BaseException as e:  # 含 SystemExit 等，避免拖垮宿主
+                result["err"] = str(e)
+
+        def _merge(out: str) -> str:
+            se = stderr.getvalue()
+            if se:
+                if out and not out.endswith("\n"):
+                    out += "\n"
+                out += "[stderr]\n" + se
+            return out
+
+        # 串行化执行：sys.stdout 是进程全局的，若上一个超时线程仍在跑，
+        # 不加锁会导致两个执行互相覆盖 stdout。加锁至少保证不串台。
+        with _EXEC_LOCK:
+            old, olde = sys.stdout, sys.stderr
+            sys.stdout = stdout
+            sys.stderr = stderr
+            th = _threading.Thread(target=_run, daemon=True)
+            try:
+                th.start()
+                th.join(self.timeout)
+                if th.is_alive():
+                    # 注意：Python 无法强杀线程，这是语言限制。失控线程会继续在后台运行。
+                    PythonExecutor._runaway += 1
+                    return _merge(stdout.getvalue()), (
+                        "执行超时（>" + str(self.timeout) + "s），已放弃等待。\n"
+                        "⚠️ 代码可能仍在后台运行（Python 无法强杀线程）。若反复出现，"
+                        "请用 python_reset 重置环境，或检查是否有死循环 / 阻塞调用。")
+                if result["mod_err"] is not None:
+                    m = result["mod_err"]
+                    return _merge(stdout.getvalue()), (
+                        "模块不可用：`" + m + "` 不在当前运行环境（打包 exe 仅含基础库清单）。\n"
+                        "可用的库：requests / bs4 / yaml / dateutil / psutil / pyperclip 及标准库。\n"
+                        "两条出路：\n"
+                        "  ① 改用 shell 动作调用系统 Python 执行该脚本（系统环境库更全）；\n"
+                        "  ② 让老板把该库加入 deephelp.spec 的 hiddenimports 后重新打包。\n"
+                        "提示：执行前可用 available('模块名') 先探测是否可用，避免试错。")
+                return _merge(stdout.getvalue()), result["err"]
+            finally:
+                sys.stdout = old
+                sys.stderr = olde
 
     def reset(self):
-        self.globals = {"__builtins__": __builtins__}
+        self.globals = self._build_globals()
         self.last_output = ""
 
 
@@ -369,6 +548,10 @@ def load_actions(directory: str = None) -> Tuple[Dict, List]:
             if t in registry:
                 errors.append((fname, "type 重复: " + t))
                 continue
+            for _p in (meta.get("params") or []):
+                _pn = _p.get("name") if isinstance(_p, dict) else None
+                if _pn in _RESERVED_ATTRS:
+                    errors.append((fname, "警告: 参数名 '" + str(_pn) + "' 与动作标签保留属性冲突，调用时会被标签属性覆盖，建议改名（如 service/target）"))
             registry[t] = {"meta": meta, "run": run, "file": fname}
         except Exception as e:
             errors.append((fname, "加载失败: " + str(e)))
@@ -525,8 +708,10 @@ def execute_action(
         info["files"] = files
 
     if not item:
-        _finish(False, "未知动作类型", "未知类型: " + type_)
-        fb = '[action id="' + str(id_) + '"] 未知的动作类型: ' + type_
+        _sug = _suggest_type(type_)
+        _hint = ("，你是不是想用 " + _sug + " ？") if _sug else ""
+        _finish(False, "未知动作类型", "未知类型: " + type_ + _hint)
+        fb = '[action id="' + str(id_) + '"] 未知的动作类型: ' + type_ + _hint
         _audit_log(type_, id_, params, fb, False, info["duration_ms"])
         return False, fb, info
 
@@ -552,7 +737,10 @@ def execute_action(
                       "feedback": "技能返回格式错误"}
         success = bool(result.get("success"))
         fb_body = result.get("feedback", result.get("summary", ""))
-        _finish(success, result.get("summary", ""), result.get("error"), **result.get("info", {}))
+        _info = dict(result.get("info", {}) or {})
+        for _k in ("success", "summary", "error"):
+            _info.pop(_k, None)   # 避免与位置参数冲突导致 TypeError
+        _finish(success, result.get("summary", ""), result.get("error"), **_info)
         fb = '[action id="' + str(id_) + '"] ' + fb_body
         _audit_log(type_, id_, params, fb, success, info["duration_ms"])
         if _tracker is not None and _trk_snap is not None:

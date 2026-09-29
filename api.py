@@ -66,8 +66,21 @@ class Api:
                 self._current_task = (getattr(task, "__name__", "task"), time.time())
             try:
                 task()
-            except Exception:
-                pass
+            except Exception as e:
+                # 不再静默：写审计日志，便于排查后台任务失败
+                try:
+                    from action import AUDIT_LOG_PATH
+                    import json as _json
+                    with open(AUDIT_LOG_PATH, "a", encoding="utf-8") as f:
+                        f.write(_json.dumps({
+                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                            "type": "_worker", "id": None,
+                            "params": {"task": getattr(task, "__name__", "task")},
+                            "result": "后台任务异常: " + str(e), "success": False,
+                            "duration_ms": 0,
+                        }, ensure_ascii=False) + "\n")
+                except Exception:
+                    pass
             finally:
                 with self._task_lock:
                     self._current_task = None
@@ -76,13 +89,14 @@ class Api:
         """独立守护线程：监测当前任务是否长时间未完成。
         只写日志 + 发系统通知，绝不调用 evaluate_js（避免线程冲突）。"""
         def _loop():
-            try:
-                limit = int(self._config.get("action_timeout") or 120)
-            except (TypeError, ValueError):
-                limit = 120
             reported = None
             while True:
                 time.sleep(10)
+                # 每轮重读配置，改设置即时生效
+                try:
+                    limit = int(self._config.get("action_timeout") or 120)
+                except (TypeError, ValueError):
+                    limit = 120
                 with self._task_lock:
                     cur = self._current_task
                 if not cur:
@@ -129,8 +143,18 @@ class Api:
     def _js(self, code):
         try:
             webview.windows[0].evaluate_js(code)
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                from action import AUDIT_LOG_PATH
+                with open(AUDIT_LOG_PATH, "a", encoding="utf-8") as f:
+                    f.write(json.dumps({
+                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                        "type": "_js", "id": None, "params": {"code": (code or "")[:120]},
+                        "result": "evaluate_js 失败: " + str(e), "success": False,
+                        "duration_ms": 0,
+                    }, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
 
     # ── 配置持久化 ──
     @staticmethod
@@ -231,6 +255,18 @@ class Api:
 
     def close_window(self):
         self._task_queue.put(None)
+        # 退出前停掉所有托管后台服务，避免残留进程 + 日志句柄占用临时目录导致清理报错
+        try:
+            pm = self._get_pm()
+            if pm is not None:
+                for svc in pm.list():
+                    if svc.get("alive"):
+                        try:
+                            pm.stop(svc["id"])
+                        except Exception:
+                            pass
+        except Exception:
+            pass
         if self._agent:
             self._agent.disconnect()
         webview.windows[0].destroy()
@@ -465,6 +501,12 @@ class Api:
         self._set_auto_mode(self._auto_mode)
         self._js('showToast("自动轮数已清零")')
 
+    def _max_action_rounds(self):
+        try:
+            return max(1, int(self._config.get("max_action_rounds") or 50))
+        except (TypeError, ValueError):
+            return 50
+
     def _run_agent(self, user_text):
         try:
             self._js("setBusy(true)")
@@ -481,13 +523,22 @@ class Api:
             # 首轮：用户消息（可能叠加排队消息，这里首轮只有本条）
             reply = self._agent.send(self._build_message(
                 self._merge_pending([("用户消息", user_text)])))
-
+            max_action_rounds = self._max_action_rounds()
             while True:
-                # 内层：动作链
+                # 内层：动作链（每轮重置计数，避免跨轮累计导致长任务被误砍）
+                action_round = 0
                 while True:
                     segs = parse_segments(reply)
                     has_action = any(s[0] == "action" for s in segs)
                     if not has_action:
+                        break
+                    action_round += 1
+                    if action_round > max_action_rounds:
+                        self._js('showToast("动作链已达上限 ' + str(max_action_rounds) + ' 步，已中止")')
+                        self._js("addMessage('assistant', " + json.dumps(
+                            "⚠️ 本轮动作链已达 " + str(max_action_rounds) + " 步上限，已中止本次自动执行，避免陷入无限循环。请检查任务逻辑。",
+                            ensure_ascii=False) + ")")
+                        reply = ""
                         break
                     feedbacks = []
                     auto_cmds = []

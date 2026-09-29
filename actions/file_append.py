@@ -37,17 +37,31 @@ def run(ctx, params, body):
     if d:
         os.makedirs(d, exist_ok=True)
 
+    # 统一换行：探测文件已有风格，保持追加内容与之一致
+    eol = "\n"
+    if os.path.exists(path) and os.path.getsize(path) > 0:
+        with open(path, "rb") as f:
+            sample = f.read(65536)
+        if b"\r\n" in sample:
+            eol = "\r\n"
+        elif b"\r" in sample:
+            eol = "\r"
+    norm_body = (body or "").replace("\r\n", "\n").replace("\r", "\n")
+
     # 自动补换行：文件已存在、非空、末尾无换行、且追加内容不以换行开头
     prefix = ""
     if os.path.exists(path) and os.path.getsize(path) > 0:
         with open(path, "rb") as f:
             f.seek(-1, os.SEEK_END)
             last = f.read(1)
-        if last != b"\n" and not body.startswith("\n"):
-            prefix = "\n"
+        if last not in (b"\n", b"\r") and not norm_body.startswith("\n"):
+            prefix = eol
 
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(prefix + body)
+    text = (prefix + norm_body)
+    if eol != "\n":
+        text = text.replace("\n", eol)
+    with open(path, "a", encoding="utf-8", newline="") as f:
+        f.write(text)
 
     n = len(body)
     extra = "（已自动补换行）" if prefix else ""

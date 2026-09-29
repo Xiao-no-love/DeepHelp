@@ -83,3 +83,36 @@
 - [x] 后端端到端：file_write/append/delete 全被追踪，diff 正确
 - [x] 前端 Playwright：三面板渲染/diff 展开/服务搜索过滤+高亮/概览计数/自动刷新 全通过，无 console 报错
 - 【待办·未做】变更追踪的「一键回滚」（本喵选的是 B 档：清单+diff，不含回滚）；快照目前随会话累积在 service_logs/_change_snapshots/，长会话需考虑清理策略
+---
+
+## 解析器容错 + 工具健壮性（2026-09-29）
+
+> 目标：把「模型输出/调用约定不稳定」导致的静默失效，从代码层根治。
+> 触发：老板发现 `type`/`name` 混用会让动作静默消失；复盘 notes 提取出 A~F 六项。
+
+### 已修 bug
+- [x] `actions/dir_list.py`：返回语句引用了**未定义的变量 `output`**（拼接结果实际在 `detailed`），导致每次调用必崩 `NameError`。补 `output = "\n".join(detailed)`。py_compile + 真实冒烟通过。
+
+### A~F 优化（全部完成）
+- [x] A 类型模糊匹配：`action.py` 新增 `_resolve_type()` / `_normalize_type_value()` / `_suggest_type()`，容错 `name` / `Type` / `typ` / 拼写错位（difflib 0.8）；`parse_actions` 与 `parse_segments` 共用
+- [x] B 不再静默丢弃：解析到 action 标签但类型不可识别 → 前端回显「⚠️ 动作未执行：属性 … 不是已知动作类型」
+- [x] C 相近建议：`execute_action` 遇未知类型用 `difflib.get_close_matches` 给「你是不是想用 xxx ？」
+- [x] D 保留字校验：`load_actions` 检查 META.params 是否撞 `type`/`id`/`replay` 保留属性，命中记 warning
+- [x] E 改动自检：`replace_lines` / `smart_patch` 已有写入校验 + 回滚；本轮每次改完立即 py_compile
+- [x] F utf-8 强制：`PythonExecutor.execute` 新增捕获 stderr（`[stderr]` 块回传）；`shell_exec._build_env` 注入 `PYTHONIOENCODING=utf-8` + `PYTHONUTF8=1`
+
+### 验证（源码态）
+- [x] A：`name=` / `Type=` / `typ=` / `dirlist` 全部容错识别为 dir_list
+- [x] B：`type="xyzabc"` → 返回诊断文本，不再无声消失
+- [x] C：`dir_lst` → 「你是不是想用 dir_list ？」
+- [x] D：当前 16 个技能参数名全部合规
+- [x] F：PYTHONIOENCODING / PYTHONUTF8 正确注入
+- [x] `py_compile` 全绿（action.py / dir_list.py / shell_exec.py）
+
+### 踩坑记录
+- 【坑·cmd 不通配符】`python -m py_compile actions\*.py` 在 Windows cmd 下**不展开通配符**，`*.py` 被当字面文件名 → `[Errno 22] Invalid argument`。批量编译改用 `python -X utf8 -m compileall -q actions`（支持目录递归）。
+- 【坑·回显漏读】replace_lines 多段替换时，回显的「已移除内容」会**跨段拼在一起**，容易看漏某段是否误吞相邻行；改完必须**逐段读回**改动区确认（本次 `ci = _find_close(...)` 曾被误吞，靠读回发现）。
+
+### 注意
+- 本次改动均在源码目录；当前跑的是打包 exe（读 `_MEIPASS`），**需重新打包或用源码运行才生效**。
+- 工作区另有前两轮修复遗留的未提交改动（_process_manager/_change_tracker/api/main 等）。

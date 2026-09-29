@@ -132,8 +132,21 @@ class ChangeTracker:
 
     def clear(self):
         with self._lock:
+            snaps = []
+            for rec in self._changes.values():
+                for k in ("orig_snap", "last_snap"):
+                    p = rec.get(k)
+                    if p:
+                        snaps.append(p)
             self._changes = {}
             self._order = []
+        # 同时清理磁盘上的快照文件，避免长会话无限堆积
+        for p in set(snaps):
+            try:
+                if p and os.path.isfile(p):
+                    os.remove(p)
+            except Exception:
+                pass
         return True
 
     # ── diff：首次快照 vs 当前 ──

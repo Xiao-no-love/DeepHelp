@@ -63,7 +63,7 @@
                 '<span>命令 ' + commandCount + '</span>';
         }
         // ====== 工具函数 ======
-        function esc(s) { if (s === null || s === undefined) return ''; return String(s).replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>') }
+        function esc(s) { if (s === null || s === undefined) return ''; var _A=String.fromCharCode(38),_L=String.fromCharCode(60),_G=String.fromCharCode(62),_Q=String.fromCharCode(34),_P=String.fromCharCode(39); var _re=new RegExp('['+_A+_L+_G+_Q+_P+']','g'); return String(s).replace(_re, function (c) { if (c===_A) return _A+'amp;'; if (c===_L) return _A+'lt;'; if (c===_G) return _A+'gt;'; if (c===_Q) return _A+'quot;'; return _A+'#39;'; }); }
         function scrollBottom(el) { el.scrollTop = el.scrollHeight }
         function msToStr(ms) { if (ms < 1000) return ms + 'ms'; if (ms < 60000) return (ms / 1000).toFixed(1) + 's'; return (ms / 60000).toFixed(1) + 'min' }
         function showToast(msg) {
@@ -459,8 +459,8 @@
                 }
                 if (obj.command || obj.output) {
                     body += '<div class="action-foot">';
-                    if (obj.command) body += '<button onclick="copyCommand(\'' + obj.id + '\')"><i class="fa-solid fa-arrow-right-to-bracket"></i> 复制输入</button>';
-                    if (obj.output) body += '<button onclick="copyOutput(\'' + obj.id + '\')"><i class="fa-solid fa-copy"></i> 复制输出</button>';
+                    if (obj.command) body += '<button onclick="copyCommand(\'' + esc(obj.id) + '\')"><i class="fa-solid fa-arrow-right-to-bracket"></i> 复制输入</button>';
+                    if (obj.output) body += '<button onclick="copyOutput(\'' + esc(obj.id) + '\')"><i class="fa-solid fa-copy"></i> 复制输出</button>';
                     body += '</div>';
                 }
                 body += '</div>';

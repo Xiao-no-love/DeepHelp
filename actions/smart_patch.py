@@ -80,12 +80,12 @@ def _validate(patch, original_lines):
         return False, "预校验失败: " + str(e)
 
 
-def _apply(patch, original_lines, has_trailing_newline):
+def _apply(patch, original_lines, has_trailing_newline, eol="\n"):
     try:
         result_lines = _wt_apply.apply_diff(patch, list(original_lines))
-        new_text = "\n".join(result_lines)
+        new_text = eol.join(result_lines)
         if has_trailing_newline:
-            new_text += "\n"
+            new_text += eol
         for marker in ("<<<<<<<", "=======", ">>>>>>>"):
             if marker in new_text:
                 return False, None, "补丁应用后存在冲突标记"
@@ -122,11 +122,22 @@ def run(ctx, params, body):
     if not patches:
         return {"success": False, "summary": "补丁解析失败", "error": "补丁解析失败",
                 "feedback": "补丁解析失败：没有有效的补丁条目"}
+    if len(patches) > 1:
+        return {"success": False, "summary": "多文件补丁不支持",
+                "error": "检测到 " + str(len(patches)) + " 个补丁条目",
+                "feedback": "检测到补丁含 " + str(len(patches)) + " 个条目（多个文件/多个独立补丁）。"
+                            "本工具一次只接受单个文件的补丁，请拆分后重试，避免静默漏改。"}
     patch = patches[0]
 
     with open(abs_path, "r", encoding="utf-8", newline="") as f:
         original_full = f.read()
     original_lines = original_full.splitlines()
+    if "\r\n" in original_full:
+        eol = "\r\n"
+    elif "\r" in original_full:
+        eol = "\r"
+    else:
+        eol = "\n"
     has_trailing_newline = original_full.endswith("\n")
 
     valid, msg = _validate(patch, original_lines)
@@ -134,7 +145,7 @@ def run(ctx, params, body):
         return {"success": False, "summary": "补丁预校验失败", "error": msg,
                 "feedback": "补丁预校验失败: " + msg}
 
-    ok, new_text, err = _apply(patch, original_lines, has_trailing_newline)
+    ok, new_text, err = _apply(patch, original_lines, has_trailing_newline, eol)
     if not ok:
         return {"success": False, "summary": "补丁应用失败", "error": err,
                 "feedback": "补丁应用失败: " + err}

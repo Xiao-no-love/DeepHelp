@@ -41,15 +41,22 @@ def run(ctx, params, body):
         return {"success": False, "summary": "文件不存在", "error": "文件不存在: " + path,
                 "feedback": "文件不存在: " + path}
 
-    file_size = os.path.getsize(path)
+    try:
+        file_size = os.path.getsize(path)
+    except Exception:
+        file_size = 0
     try:
         max_chars = int(params.get("max_chars", _DEFAULT_MAX))
     except (ValueError, TypeError):
         max_chars = _DEFAULT_MAX
 
-    with open(path, "r", encoding="utf-8") as f:
-        content = f.read(max_chars)
-        truncated = f.read(1) != ""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read(max_chars)
+            truncated = f.read(1) != ""
+    except (IsADirectoryError, PermissionError, UnicodeDecodeError, OSError) as e:
+        return {"success": False, "summary": "读取失败", "error": str(e),
+                "feedback": "文件读取失败: " + str(e)}
 
     lines = content.splitlines()
     n = len(lines)

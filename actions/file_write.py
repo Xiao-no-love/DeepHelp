@@ -26,6 +26,22 @@ META = {
 }
 
 
+def _detect_eol(path):
+    """探测已存在文件的换行风格；不存在则用 \n（跨平台/git 友好）。"""
+    try:
+        if not os.path.exists(path):
+            return "\n"
+        with open(path, "r", encoding="utf-8", newline="") as f:
+            sample = f.read(65536)
+        if "\r\n" in sample:
+            return "\r\n"
+        if "\r" in sample:
+            return "\r"
+        return "\n"
+    except Exception:
+        return "\n"
+
+
 def run(ctx, params, body):
     file_ = params.get("file")
     if not file_:
@@ -35,9 +51,14 @@ def run(ctx, params, body):
     d = os.path.dirname(path)
     if d:
         os.makedirs(d, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(body)
-    n = len(body)
+    # 统一换行：保持已存在文件的换行风格，避免把 CRLF 项目改成 LF（或反之）
+    eol = _detect_eol(path)
+    text = (body or "").replace("\r\n", "\n").replace("\r", "\n")
+    if eol != "\n":
+        text = text.replace("\n", eol)
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(text)
+    n = len(text)
     return {
         "success": True, "summary": "写入 " + str(n) + " 字符",
         "feedback": "文件写入成功: " + path + "\n已写入 " + str(n) + " 字符",

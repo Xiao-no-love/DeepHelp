@@ -29,11 +29,17 @@ _MUTEX = None
 
 
 def _acquire_single_instance():
-    """用命名互斥体确保只有一个实例。返回 True 表示获得运行权。"""
+    """用命名互斥体确保只有一个实例。返回 True 表示获得运行权。
+    注意：CreateMutexW 成功时不会清零 LastError，必须先 SetLastError(0)，
+    否则可能被此前 Win32 调用残留的错误码（恰好 183）误判为"已在运行"。"""
     global _MUTEX
     try:
-        _MUTEX = ctypes.windll.kernel32.CreateMutexW(None, False, "DeepHelp_SingleInstance_Mutex")
-        if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+        k32 = ctypes.windll.kernel32
+        k32.SetLastError(0)
+        _MUTEX = k32.CreateMutexW(None, False, "DeepHelp_SingleInstance_Mutex")
+        if not _MUTEX:                       # 句柄无效：创建失败，放行不阻塞
+            return True
+        if k32.GetLastError() == 183:        # ERROR_ALREADY_EXISTS
             return False
     except Exception:
         pass

@@ -17,10 +17,15 @@ import threading
 import subprocess
 import ctypes
 
-# 项目根目录（actions/ 的上一级）
-_ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 运行时数据根目录：frozen 时用 exe 同级（持久可写），否则用项目根。
+# 绝不能用 __file__ 上级——打包单文件模式下 __file__ 指向 _MEIPASS 临时目录，
+# 程序退出时该目录会被删除，而仍持有日志句柄的服务进程会导致删除失败报错。
+if getattr(sys, "frozen", False):
+    _ROOT_DIR = os.path.dirname(sys.executable)
+else:
+    _ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_DIR = os.environ.get("DH_SERVICE_LOG_DIR") or os.path.join(_ROOT_DIR, "service_logs")
-
+SERVICES_STATE_FILE = os.path.join(LOG_DIR, "services.json")
 _IS_WINDOWS = os.name == "nt"
 
 # Windows 进程创建标志
@@ -57,6 +62,33 @@ def _pid_alive(pid):
         return False
 
 
+def _pid_create_time(pid):
+    """返回进程创建时间（epoch 秒）；拿不到返回 None。
+    用于识别 PID 复用：pid 存活但创建时间对不上 → 是别的进程。"""
+    if not pid or pid <= 0 or not _IS_WINDOWS:
+        return None
+    try:
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        k32 = ctypes.windll.kernel32
+        h = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+        if not h:
+            return None
+        try:
+            creation = ctypes.c_ulonglong(0)
+            exit_t = ctypes.c_ulonglong(0)
+            kernel = ctypes.c_ulonglong(0)
+            user = ctypes.c_ulonglong(0)
+            if not k32.GetProcessTimes(h, ctypes.byref(creation), ctypes.byref(exit_t),
+                                       ctypes.byref(kernel), ctypes.byref(user)):
+                return None
+            # FILETIME 是 100ns 单位，起点 1601-01-01 → 转 Unix epoch
+            return creation.value / 1e7 - 11644473600
+        finally:
+            k32.CloseHandle(h)
+    except Exception:
+        return None
+
+
 class ManagedProcess:
     """一条被托管的后台进程记录。"""
 
@@ -68,9 +100,24 @@ class ManagedProcess:
         self.cwd = cwd
         self.log_path = log_path
         self.start_time = time.time()
+        self.create_time = None   # 进程真实创建时间（识别 PID 复用）
+
+    def _alive_and_same(self):
+        """存活且非 PID 复用：进程在，且其真实创建时间与本记录相符。
+        create_time 未知（拿不到/未记录）时降级为只看存活。"""
+        if not _pid_alive(self.pid):
+            return False
+        if self.create_time is None:
+            return True
+        ct = _pid_create_time(self.pid)
+        if ct is None:
+            return True   # 拿不到就信存活
+        # 容差 5 秒：记录时刻与进程真实创建时刻可能有细微差
+        return abs(ct - self.create_time) <= 5
 
     def to_dict(self):
         alive = _pid_alive(self.pid)
+        reused = alive and not self._alive_and_same()   # pid 被别人占了
         return {
             "id": self.id,
             "pid": self.pid,
@@ -81,7 +128,8 @@ class ManagedProcess:
             "start_time": self.start_time,
             "start_str": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self.start_time)),
             "uptime_sec": int(time.time() - self.start_time),
-            "alive": alive,
+            "alive": alive and not reused,
+            "pid_reused": reused,
         }
 
 
@@ -106,6 +154,41 @@ class ProcessManager:
         self._seq = 0
         try:
             os.makedirs(LOG_DIR, exist_ok=True)
+        except Exception:
+            pass
+        self._load()
+
+    # ── 持久化：services.json 存进程记录，程序重启后仍可见历史服务 ──
+    def _load(self):
+        try:
+            if not os.path.isfile(SERVICES_STATE_FILE):
+                return
+            import json as _json
+            with open(SERVICES_STATE_FILE, "r", encoding="utf-8") as f:
+                data = _json.load(f)
+            for rec in data.get("procs", []):
+                mp = ManagedProcess(rec.get("id"), rec.get("pid"), rec.get("name"),
+                                    rec.get("cmd"), rec.get("cwd"), rec.get("log_path"))
+                mp.start_time = rec.get("start_time", mp.start_time)
+                mp.create_time = rec.get("create_time")
+                self._procs[mp.id] = mp
+            self._seq = max([int(p.id[3:]) for p in self._procs.values()
+                             if p.id.startswith("svc") and p.id[3:].isdigit()] + [0])
+        except Exception:
+            pass
+
+    def _save(self):
+        try:
+            import json as _json
+            with self._lock:
+                recs = [{"id": mp.id, "pid": mp.pid, "name": mp.name, "cmd": mp.cmd,
+                         "cwd": mp.cwd, "log_path": mp.log_path, "start_time": mp.start_time,
+                         "create_time": mp.create_time}
+                        for mp in self._procs.values()]
+            tmp = SERVICES_STATE_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                _json.dump({"procs": recs}, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, SERVICES_STATE_FILE)
         except Exception:
             pass
 
@@ -146,8 +229,10 @@ class ProcessManager:
             lf.close()
 
         mp = ManagedProcess(sid, proc.pid, name, cmd, cwd, log_file)
+        mp.create_time = _pid_create_time(proc.pid)
         with self._lock:
             self._procs[sid] = mp
+        self._save()
         return mp
 
     # ── 查询 ──
@@ -173,6 +258,7 @@ class ProcessManager:
         if mp is None:
             return False, "未找到托管进程: " + str(ident)
         if not _pid_alive(mp.pid):
+            self._save()
             return True, "进程已不在运行 (pid " + str(mp.pid) + ")"
         if _IS_WINDOWS:
             try:
@@ -183,12 +269,14 @@ class ProcessManager:
                 )
                 ok = r.returncode == 0
                 msg = (r.stdout or r.stderr or "").strip()
+                self._save()
                 return ok, msg
             except Exception as e:
                 return False, "停止失败: " + str(e)
         else:
             try:
                 os.kill(mp.pid, 15)
+                self._save()
                 return True, "已发送 SIGTERM"
             except Exception as e:
                 return False, "停止失败: " + str(e)
@@ -202,7 +290,12 @@ class ProcessManager:
             return "", None
         try:
             with open(mp.log_path, "rb") as f:
-                raw = f.read()
+                f.seek(0, os.SEEK_END)
+                size = f.tell()
+                block = 65536
+                window = min(size, max(block, int(tail) * 400))
+                f.seek(size - window)
+                raw = f.read(window)
             for enc in ("utf-8", "gbk"):
                 try:
                     text = raw.decode(enc)
