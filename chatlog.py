@@ -42,8 +42,15 @@ def _path_for(session_id):
 
 
 def write(session_id, kind, **fields):
-    """追加一条流水。失败静默——日志绝不拖垮主流程。"""
+    """追加一条流水。失败静默——日志绝不拖垮主流程。
+
+    空值过滤：user / assistant_text 若 text 去空白后为空，则不写（避免空记录污染）。
+    """
     try:
+        if kind in ("user", "assistant_text"):
+            _t = fields.get("text")
+            if _t is None or str(_t).strip() == "":
+                return
         entry = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "kind": kind,

@@ -315,7 +315,7 @@
                 updateQuizSubmit(t.closest('.quiz-group'));
             }
         });
-        function addMessage(role, text, queued) {
+        function addMessage(role, text, queued, silent) {
             if (role === 'assistant') {
                 receivedChars += text.length;
                 updateStats();
@@ -357,9 +357,11 @@
                 }
                 chatEl.appendChild(div);
                 scrollBottom(chatEl);
-                setTimeout(() => {
-                    virtualMessage('assistant');
-                }, 100);
+                if (!silent) {
+                    setTimeout(() => {
+                        virtualMessage('assistant');
+                    }, 100);
+                }
             }
         }
 
@@ -710,9 +712,13 @@
             for (var i = 0; i < records.length; i++) {
                 var r = records[i];
                 if (r.kind === 'user') {
-                    addMessage('user', r.text || '');
+                    if (r.text && String(r.text).trim()) {
+                        addMessage('user', r.text, false, true);
+                    }
                 } else if (r.kind === 'assistant_text') {
-                    addMessage('assistant', r.text || '');
+                    if (r.text && String(r.text).trim()) {
+                        addMessage('assistant', r.text, false, true);
+                    }
                 } else if (r.kind === 'tool') {
                     addAction({
                         type: r.type || '',
