@@ -57,6 +57,22 @@ class Api:
         self._last_explorer = set()
         self._watcher = None
         self._watch_stop = threading.Event()
+    @staticmethod
+    def _audit(atype, params=None, result="", success=False, duration_ms=0, aid=None):
+        """统一审计日志写入（后台任务/看门狗/evaluate_js 失败等内部事件）。"""
+        try:
+            from action import AUDIT_LOG_PATH
+            entry = {
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "type": atype, "id": aid, "params": params or {},
+                "result": (result or "")[:500], "success": success,
+                "duration_ms": duration_ms,
+            }
+            with open(AUDIT_LOG_PATH, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+
     def _worker_loop(self):
         while True:
             task = self._task_queue.get()
@@ -68,19 +84,9 @@ class Api:
                 task()
             except Exception as e:
                 # 不再静默：写审计日志，便于排查后台任务失败
-                try:
-                    from action import AUDIT_LOG_PATH
-                    import json as _json
-                    with open(AUDIT_LOG_PATH, "a", encoding="utf-8") as f:
-                        f.write(_json.dumps({
-                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                            "type": "_worker", "id": None,
-                            "params": {"task": getattr(task, "__name__", "task")},
-                            "result": "后台任务异常: " + str(e), "success": False,
-                            "duration_ms": 0,
-                        }, ensure_ascii=False) + "\n")
-                except Exception:
-                    pass
+                self._audit("_worker",
+                            {"task": getattr(task, "__name__", "task")},
+                            "后台任务异常: " + str(e), False)
             finally:
                 with self._task_lock:
                     self._current_task = None
@@ -92,11 +98,19 @@ class Api:
             reported = None
             while True:
                 time.sleep(10)
-                # 每轮重读配置，改设置即时生效
+                # 每轮重读配置，改设置即时生效。
+                # 阈值取 max(action_timeout, max_send_interval) + 30s 余量：
+                # 因为"限流退避等待"最长可达 max_send_interval（默认 120s），是合法等待、
+                # 不是任务卡死。若阈值只取 action_timeout，限流期间会被误报为"卡死"。
                 try:
-                    limit = int(self._config.get("action_timeout") or 120)
+                    _at = int(self._config.get("action_timeout") or 120)
                 except (TypeError, ValueError):
-                    limit = 120
+                    _at = 120
+                try:
+                    _msi = int(self._config.get("max_send_interval") or 120)
+                except (TypeError, ValueError):
+                    _msi = 120
+                limit = max(_at, _msi) + 30
                 with self._task_lock:
                     cur = self._current_task
                 if not cur:
@@ -106,18 +120,9 @@ class Api:
                 elapsed = time.time() - t0
                 if elapsed > limit and reported != t0:
                     reported = t0
-                    try:
-                        from action import AUDIT_LOG_PATH
-                        with open(AUDIT_LOG_PATH, "a", encoding="utf-8") as f:
-                            f.write(json.dumps({
-                                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                                "type": "watchdog", "id": None,
-                                "params": {"task": name, "elapsed": int(elapsed)},
-                                "result": "任务长时间未完成", "success": False,
-                                "duration_ms": int(elapsed * 1000),
-                            }, ensure_ascii=False) + "\n")
-                    except Exception:
-                        pass
+                    self._audit("watchdog",
+                                {"task": name, "elapsed": int(elapsed)},
+                                "任务长时间未完成", False, int(elapsed * 1000))
                     try:
                         import subprocess as _sp
                         _sp.Popen(
@@ -144,17 +149,8 @@ class Api:
         try:
             webview.windows[0].evaluate_js(code)
         except Exception as e:
-            try:
-                from action import AUDIT_LOG_PATH
-                with open(AUDIT_LOG_PATH, "a", encoding="utf-8") as f:
-                    f.write(json.dumps({
-                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                        "type": "_js", "id": None, "params": {"code": (code or "")[:120]},
-                        "result": "evaluate_js 失败: " + str(e), "success": False,
-                        "duration_ms": 0,
-                    }, ensure_ascii=False) + "\n")
-            except Exception:
-                pass
+            self._audit("_js", {"code": (code or "")[:120]},
+                        "evaluate_js 失败: " + str(e), False)
 
     # ── 配置持久化 ──
     @staticmethod
@@ -520,8 +516,8 @@ class Api:
                 self._set_status("connecting", "正在加载 DeepSeek...")
                 self._set_status("connected")
 
-            # 首轮：用户消息（可能叠加排队消息，这里首轮只有本条）
-            reply = self._agent.send(self._build_message(
+            # 首轮：用户消息。用 pre_send 在限流等待后再组装，确保期间的插话能搭车
+            reply = self._agent.send(None, pre_send=lambda: self._build_message(
                 self._merge_pending([("用户消息", user_text)])))
             max_action_rounds = self._max_action_rounds()
             while True:
@@ -565,13 +561,9 @@ class Api:
                             }, ensure_ascii=False) + ")")
                             continue
                         # S3：执行前推 start（补 meta 供"运行中"卡片显示图标/标签）
-                        try:
-                            _pdict = {}
-                            import re as _re
-                            for _m in _re.finditer(r'([A-Za-z_][\w-]*)\s*=\s*"([^"]*)"', params or ""):
-                                _pdict[_m.group(1)] = _m.group(2)
-                        except Exception:
-                            _pdict = {}
+                        # 复用内核的健壮属性解析器，避免手写正则漏引号/转义
+                        from action import get_param as _get_param
+                        _pfile = _get_param(params, "file") or _get_param(params, "path") or ""
                         _am = (self._config.get("action_meta") or {}).get(type_)
                         _sicon = _am[0] if _am else ""
                         _slabel = _am[1] if _am else type_
@@ -579,7 +571,7 @@ class Api:
                         self._js("addActionStart(" + json.dumps({
                             "id": id_, "type": type_,
                             "icon": _sicon, "label": _slabel, "color": _scolor,
-                            "path": _pdict.get("file") or _pdict.get("path") or "",
+                            "path": _pfile,
                         }, ensure_ascii=False) + ")")
                         ok, fb_text, info = execute_action(
                             type_, id_, params, body,
@@ -599,21 +591,21 @@ class Api:
                     if not feedbacks:
                         reply = ""
                         break
-                    # 发送工具输出前，把老板期间插的话搭车并入
-                    reply = self._agent.send(self._build_message(
-                        self._merge_pending([("工具输出", "\n\n".join(feedbacks))])))
+                    # 工具输出回传：用 pre_send 在【限流等待结束后】再取插话，
+                    # 这样老板在限流等待那几秒里发的话也能并入本轮，不必白等一轮
+                    _fb_text = "\n\n".join(feedbacks)
+                    reply = self._agent.send(None, pre_send=lambda: self._build_message(
+                        self._merge_pending([("工具输出", _fb_text)])))
                 if reply:
                     self._js(
                         f"addMessage('assistant', {json.dumps(reply, ensure_ascii=False)})"
                     )
 
                 # 外层：决定是否继续下一轮
+                # 注意：这里【不】提前 drain pending——改为在 send 的 pre_send 回调里统一取，
+                # 避免"提前取走"导致限流窗口期间的插话漏掉（也消除重复 drain）。
                 blocks = []
-                # 1) 排队消息优先（兜底：本轮 AI 纯文本回复后，排队消息单独带出）
-                pending = self._drain_pending()
-                if pending:
-                    blocks.append(("用户消息", pending))
-                # 2) 自动模式续接
+                # 自动模式续接
                 if self._auto_mode:
                     cap = self._auto_max_rounds()
                     if self._auto_round >= cap:
@@ -630,9 +622,12 @@ class Api:
                             "自动模式：继续推进当前任务（第 " + str(self._auto_round) + "/" + str(cap) + " 轮）。\n"
                             "完成目标后请调用 auto_mode off 关闭自动模式。\n"
                             "若需要用户决策或确认，请用 quiz 出题并先调用 auto_mode off。"))
-                if not blocks:
+                # 无自动续接、且此刻也无插话可带 → 结束本轮
+                # （pending 是否有值，交给 pre_send 里判断；这里先粗判 blocks）
+                if not blocks and not self._pending:
                     break
-                reply = self._agent.send(self._build_message(self._merge_pending(blocks)))
+                reply = self._agent.send(None, pre_send=lambda: self._build_message(
+                    self._merge_pending(blocks)))
                 if not reply:
                     break
         except Exception as e:

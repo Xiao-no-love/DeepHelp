@@ -528,6 +528,10 @@ def load_actions(directory: str = None) -> Tuple[Dict, List]:
     for fname in sorted(os.listdir(d)):
         if not fname.endswith(".py") or fname.startswith("_"):
             continue
+        # 排除备份/临时文件：只认单点名的 .py（如 x.py），挡掉 x.py.bak / x.orig.py 等
+        _lower = fname.lower()
+        if fname.count(".") != 1 or _lower.endswith((".py.bak", ".bak", ".orig", ".tmp", ".swp")):
+            continue
         fpath = os.path.join(d, fname)
         try:
             spec = importlib.util.spec_from_file_location(fname[:-3], fpath)

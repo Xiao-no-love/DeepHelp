@@ -160,11 +160,15 @@ class DeepSeekAgent:
     def _wait_cooldown(self):
         """限速等待：距上次回复返回不足当前间隔则阻塞。
         所有发送（用户消息 / 系统提示注入 / 动作回传）都走 send()，因此一并受限。"""
+        last_shown = None
         while True:
             remain = self._next_send_at - time.time()
             if remain <= 0:
                 return
-            self._report(f"限速等待 {int(remain) + 1}s...")
+            secs = int(remain) + 1
+            if secs != last_shown:   # 仅在整秒数变化时推送，避免每秒刷状态
+                last_shown = secs
+                self._report(f"限速等待 {secs}s...")
             time.sleep(min(1.0, remain))
 
     def _connect_cdp(self, on_status=None):
@@ -267,6 +271,10 @@ class DeepSeekAgent:
 
     def _is_sendable(self):
         """发送按钮是否可用"""
+        if self._send_btn is None:
+            # 定位失败：明确返回不可发送，避免 None.evaluate 抛错被上层误吞成
+            # "按钮长时间不可用"，掩盖"根本没定位到按钮"的真实原因
+            return False
         cls = self._send_btn.evaluate("el => el.className")
         return (
 
@@ -277,8 +285,8 @@ class DeepSeekAgent:
 
     def _is_generating(self):
         """是否正在生成回复（按钮图标为停止图标）"""
-
-
+        if self._send_btn is None:
+            return False
         return self._get_svg_path(self._send_btn) != self._send_svg
 
     def _find_button_by_svg(self, svg_path, scope=None, last=False):
@@ -368,14 +376,24 @@ class DeepSeekAgent:
                     return picked
         raise RuntimeError("未能定位复制按钮：未找到非代码块的复制图标")
 
-    def send(self, prompt):
+    def send(self, prompt, pre_send=None):
         """
         发送提示词，等待生成完成，获取AI回复文本
         兼容无头模式，不依赖系统剪贴板、不依赖pyperclip
         复用网页原生复制逻辑输出，和手动复制效果完全一致
+
+        pre_send: 可选回调，在【限流等待结束后、真正发送前】调用，用于重新组装
+        prompt（典型用途：把用户在限流等待期间插入的消息搭车并入本轮，避免白等一轮）。
+        回调返回最终要发送的 prompt 字符串。
         """
         # 限速：距上次回复返回不足当前间隔则先等待
         self._wait_cooldown()
+        # 等待结束后再组装最终 prompt：此时用户新插的话已在 pending，能被带上
+        if pre_send is not None:
+            try:
+                prompt = pre_send()
+            except Exception:
+                pass   # 组装失败则用原 prompt，不阻断发送
         try:
             result = self._send_once(prompt)
         except Exception:
@@ -390,8 +408,17 @@ class DeepSeekAgent:
 
     def _send_once(self, prompt):
         """真正的一轮发送 + 等待生成 + 取回文本（不含限速包装）"""
-        timeout_ms = self._cfg["action_timeout"] * 1000
-
+        # AI 回复等待：优先 reply_timeout，缺失/非正数回退 action_timeout（向后兼容）
+        try:
+            _rt = self._cfg.get("reply_timeout")
+            if _rt is None:
+                _rt = self._cfg["action_timeout"]
+            _rt = float(_rt)
+            if _rt <= 0:          # 0/负数无意义，视为未配置
+                _rt = 120.0
+        except (TypeError, ValueError, KeyError):
+            _rt = 120.0
+        timeout_ms = _rt * 1000
         textarea = self._textarea
 
         # 每轮发送前刷新发送按钮定位（防止 nth 索引随页面按钮增减而漂移）

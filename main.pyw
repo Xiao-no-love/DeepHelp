@@ -36,7 +36,14 @@ def _acquire_single_instance():
     try:
         k32 = ctypes.windll.kernel32
         k32.SetLastError(0)
-        _MUTEX = k32.CreateMutexW(None, False, "DeepHelp_SingleInstance_Mutex")
+        # 锁名按运行目录派生：源码版与打包版（不同目录）各持一把锁，互不顶掉。
+        # 同目录重复启动才会命中"已在运行"。
+        _key = os.path.dirname(os.path.abspath(__file__ if not getattr(sys, "frozen", False)
+                                          else sys.executable))
+        import hashlib as _hashlib
+        _tag = _hashlib.md5(_key.encode("utf-8")).hexdigest()[:12]
+        _mutex_name = "DeepHelp_SingleInstance_" + _tag
+        _MUTEX = k32.CreateMutexW(None, False, _mutex_name)
         if not _MUTEX:                       # 句柄无效：创建失败，放行不阻塞
             return True
         if k32.GetLastError() == 183:        # ERROR_ALREADY_EXISTS

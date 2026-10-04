@@ -30,4 +30,12 @@ config.local.json
 prompt.json
 # 运行时产物 / 备份（勿入库）
 service_logs/
-_backup_*/
+_backup_*/
+# 本地分析/补丁产物（不入库）
+OPTIMIZE_REPORT.md
+_patch_*.py
+_batch_*.py
+_fix*.py
+_regress.py
+_fr*.py
+_test_*.py

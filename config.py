@@ -40,7 +40,8 @@ DEFAULT_CONFIG = {
     "deepseek_url": "https://chat.deepseek.com/",
     "max_action_rounds": 50,
     "auto_max_rounds": 5,
-    "action_timeout": 120,
+    "action_timeout": 120,   # 看门狗：单任务超过此秒数判定为"可能卡死"（只告警不中断）
+    "reply_timeout": 120,    # agent：等待 AI 单次回复的最长秒数（缺失时回退 action_timeout）
     "shell_timeout": 30,
     "services": {
         "log_dir": "",
