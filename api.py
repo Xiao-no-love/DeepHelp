@@ -61,6 +61,7 @@ class Api:
         # 本地对话流水：当前会话 id（会话 URL 解析而来），懒定
         self._session_id = ""
         self._session_logged = ""
+        self._session_title_logged = ""
     @staticmethod
     def _audit(atype, params=None, result="", success=False, duration_ms=0, aid=None):
         """统一审计日志写入（后台任务/看门狗/evaluate_js 失败等内部事件）。"""
@@ -78,10 +79,11 @@ class Api:
             pass
 
     def _log_session_url(self):
-        """解析 agent 当前页面 URL，定 session_id；会话变化时记一条 url（含标题）。
+        """解析 agent 当前页面 URL，定 session_id；会话或标题变化时记一条 url。
 
-        每轮对话开始时调用——若用户在网页端切换到别的会话，URL 会变，
-        此处检测到变化即更新 session_id 并补记一条 url，实现「URL 监测」。
+        每轮对话开始时调用——若用户在网页端切换会话，URL 会变；
+        若用户用 set_chat_title 改了标题，标题也会变。两者任一变化即补记
+        一条 url 记录，实现「URL + 标题」监测，保证历史列表显示最新标题。
         """
         try:
             url = ""
@@ -92,10 +94,14 @@ class Api:
             sid = chatlog.session_id_from_url(url)
             if sid:
                 self._session_id = sid
-            # 会话变化（或首次）才记录，避免每轮重复写
-            if self._session_id and self._session_id != self._session_logged:
+            # 会话变化 或 标题变化 才记录，避免每轮重复写
+            if self._session_id and (
+                self._session_id != self._session_logged
+                or title != self._session_title_logged
+            ):
                 chatlog.record_url_with_title(self._session_id, url, title)
                 self._session_logged = self._session_id
+                self._session_title_logged = title
         except Exception:
             pass
 
