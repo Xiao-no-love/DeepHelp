@@ -618,6 +618,115 @@
             }
             if (historyList) historyList.innerHTML = html || '<div class="fs-empty"><i class="fa-solid fa-inbox"></i> 暂无任务</div>';
         }
+        // ====== 历史会话（单窗口信息本地化）======
+        function showSessions() {
+            var ov = document.getElementById('sessions-overlay');
+            if (!ov) return;
+            ov.classList.add('open');
+            renderSessions();
+        }
+        function hideSessions() {
+            var ov = document.getElementById('sessions-overlay');
+            if (ov) ov.classList.remove('open');
+        }
+        function renderSessions() {
+            var listEl = document.getElementById('sessions-list');
+            if (!listEl) return;
+            if (!window.pywebview || !window.pywebview.api) {
+                listEl.innerHTML = '<div class="fs-empty">未就绪</div>';
+                return;
+            }
+            listEl.innerHTML = '<div class="fs-empty">加载中...</div>';
+            window.pywebview.api.get_sessions().then(function (res) {
+                if (!res || !res.ok) {
+                    listEl.innerHTML = '<div class="fs-empty">' + esc((res && res.error) || '获取失败') + '</div>';
+                    return;
+                }
+                var items = res.sessions || [];
+                if (!items.length) {
+                    listEl.innerHTML = '<div class="fs-empty">暂无历史会话</div>';
+                    return;
+                }
+                var html = '';
+                for (var i = 0; i < items.length; i++) {
+                    var it = items[i];
+                    // 时间：2026-10-04T13:09:39 -> 10-04 13:09
+                    var t = (it.time || '').replace('T', ' ');
+                    var shortT = t.length >= 16 ? t.slice(5, 16) : (t || '--');
+                    var title = it.title || '(无标题)';
+                    var cnt = it.count || 0;
+                    html += '<div class="session-item" data-action="session-open" data-session-id="' + esc(it.session_id) + '">'
+                        + '<div class="sess-line1">'
+                        + '<span class="sess-title" title="' + esc(title) + '">' + esc(title) + '</span>'
+                        + '<span class="sess-count">' + cnt + '条</span>'
+                        + '</div>'
+                        + '<div class="sess-line2">'
+                        + '<span class="sess-time"><i class="fa-regular fa-clock"></i> ' + esc(shortT) + '</span>'
+                        + '<span class="sess-id">' + esc((it.session_id || '').slice(0, 8)) + '</span>'
+                        + '</div>'
+                        + '</div>';
+                }
+                listEl.innerHTML = html;
+            });
+        }
+
+        // 点击会话项：确认 -> 清空当前对话 -> 调后端恢复 -> 重放渲染
+        function restoreSession(sid, el) {
+            if (!sid) return;
+            confirmModal({
+                title: '恢复历史会话',
+                body: '将<strong>清空当前对话</strong>并恢复该历史会话的本地记录，<br>同时让 Chrome 跳转到该会话。继续？',
+                confirmText: '恢复',
+                onConfirm: function () { doRestoreSession(sid); }
+            });
+        }
+
+        function doRestoreSession(sid) {
+            hideSessions();
+            chatEl.innerHTML = '';
+            sentChars = 0;
+            receivedChars = 0;
+            commandCount = 0;
+            updateStats();
+
+            if (!window.pywebview || !window.pywebview.api) {
+                showToast('环境未就绪');
+                return;
+            }
+            window.pywebview.api.open_session(sid).then(function (res) {
+                if (!res || !res.ok) {
+                    showToast('恢复失败: ' + ((res && res.error) || '未知'));
+                    return;
+                }
+                var recs = res.records || [];
+                replayRecords(recs);
+                showToast('已恢复 ' + recs.length + ' 条记录');
+            }).catch(function (e) {
+                showToast('恢复异常: ' + e);
+            });
+        }
+
+        function replayRecords(records) {
+            for (var i = 0; i < records.length; i++) {
+                var r = records[i];
+                if (r.kind === 'user') {
+                    addMessage('user', r.text || '');
+                } else if (r.kind === 'assistant_text') {
+                    addMessage('assistant', r.text || '');
+                } else if (r.kind === 'tool') {
+                    addAction({
+                        type: r.type || '',
+                        icon: r.icon || '',
+                        label: r.label || r.type || '',
+                        color: r.color || '#8b949e',
+                        success: r.success,
+                        duration_ms: r.duration_ms,
+                        path: r.target || ''
+                    });
+                }
+            }
+        }
+
         function toggleHistoryDetail(i) {
             var el = document.getElementById('hist-detail-' + i);
             if (el) el.classList.toggle('open');
@@ -1031,6 +1140,11 @@
         window.hideModal = hideModal;
         window.showDropConfirm = showDropConfirm;
         window.clearHistory = clearHistory;
+        window.showSessions = showSessions;
+        window.hideSessions = hideSessions;
+        window.renderSessions = renderSessions;
+        window.restoreSession = restoreSession;
+        window.replayRecords = replayRecords;
         window.toggleSettings = toggleSettings;
         window.saveSettings = saveSettings;
         window.resetSettings = resetSettings;
@@ -1373,6 +1487,10 @@
         },
         'svc-stop': function (el) { svcStop(el.getAttribute('data-id')); },
         'svc-log': function (el) { svcLog(el.getAttribute('data-id')); },
+        'show-sessions': function () { showSessions(); },
+        'session-open': function (el) { restoreSession(el.getAttribute('data-session-id'), el); },
+        'sessions-close': function () { hideSessions(); },
+        'sessions-refresh': function () { renderSessions(); },
         'fv-close': function () { fvClose(); },
         'fv-open': function () { fvOpenExplorer(); },
         'workdir-accept': function () { workdirAccept(); },

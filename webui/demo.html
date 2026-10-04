@@ -112,6 +112,7 @@
                 <button id="btn-connect" data-action="connect-page" title="手动重连浏览器和页面"><i class="fa-solid fa-plug"></i>
                     重连页面</button>
                 <button data-action="clear-chat"><i class="fa-solid fa-eraser"></i> 清空</button>
+                <button data-action="show-sessions" title="查看本地记录的历史会话"><i class="fa-solid fa-clock-rotate-left"></i> 历史会话</button>
             </div>
             <div id="chat-list"></div>
             <div class="chat-divider" id="chat-divider"></div>
@@ -359,6 +360,21 @@
             </span>
         </div>
         <pre class="fv-code"><code id="fv-code"></code></pre>
+    </div>
+    <!-- 历史会话浮层 -->
+    <div id="sessions-overlay" class="sessions-overlay">
+        <div class="sessions-dialog">
+            <div class="sessions-head">
+                <span class="sessions-title"><i class="fa-solid fa-clock-rotate-left"></i> 历史会话</span>
+                <span class="sessions-actions">
+                    <button data-action="sessions-refresh" title="刷新"><i class="fa-solid fa-rotate"></i></button>
+                    <button data-action="sessions-close" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+                </span>
+            </div>
+            <div class="sessions-body">
+                <div class="sessions-list" id="sessions-list"></div>
+            </div>
+        </div>
     </div>
     <script src="js/app.js"></script>
 </body>

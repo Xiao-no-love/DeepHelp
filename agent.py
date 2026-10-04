@@ -530,3 +530,29 @@ class DeepSeekAgent:
         except Exception:
             pass
         return ""
+
+    def goto_session(self, url):
+        """让当前页面跳转到指定会话 URL（复用已有 sync_playwright 实例）。
+
+        必须在 worker 线程调用（agent 的 sync_playwright 在 worker 线程创建），
+        故 api 层应通过 _post 调度过来，切勿在其它线程直接调。
+        返回 True 表示已发起跳转，False 表示当前不可用。
+        """
+        if not self._page or not url:
+            return False
+        try:
+            self._page.goto(url)
+            self._page.wait_for_load_state("networkidle")
+            self._page.bring_to_front()
+            return True
+        except Exception:
+            return False
+    @property
+    def page_title(self):
+        """当前页面的标签页标题（未就绪返回空串）。"""
+        try:
+            if self._page:
+                return self._page.title() or ""
+        except Exception:
+            pass
+        return ""

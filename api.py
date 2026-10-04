@@ -24,6 +24,7 @@ from webview.dom import DOMEventHandler
 from config import DEFAULT_CONFIG, WORK_DIR, CONFIG_FILE, deep_merge
 from action import parse_actions, strip_actions, parse_segments, execute_action, get_param_bool
 from agent import DeepSeekAgent, ensure_chrome_running
+import chatlog
 
 
 class Api:
@@ -57,6 +58,9 @@ class Api:
         self._last_explorer = set()
         self._watcher = None
         self._watch_stop = threading.Event()
+        # 本地对话流水：当前会话 id（会话 URL 解析而来），懒定
+        self._session_id = ""
+        self._session_logged = ""
     @staticmethod
     def _audit(atype, params=None, result="", success=False, duration_ms=0, aid=None):
         """统一审计日志写入（后台任务/看门狗/evaluate_js 失败等内部事件）。"""
@@ -72,6 +76,42 @@ class Api:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         except Exception:
             pass
+
+    def _log_session_url(self):
+        """解析 agent 当前页面 URL，定 session_id；会话变化时记一条 url（含标题）。
+
+        每轮对话开始时调用——若用户在网页端切换到别的会话，URL 会变，
+        此处检测到变化即更新 session_id 并补记一条 url，实现「URL 监测」。
+        """
+        try:
+            url = ""
+            title = ""
+            if self._agent is not None:
+                url = self._agent.page_url or ""
+                title = (self._agent.page_title or "").replace(" - DeepSeek", "").strip()
+            sid = chatlog.session_id_from_url(url)
+            if sid:
+                self._session_id = sid
+            # 会话变化（或首次）才记录，避免每轮重复写
+            if self._session_id and self._session_id != self._session_logged:
+                chatlog.record_url_with_title(self._session_id, url, title)
+                self._session_logged = self._session_id
+        except Exception:
+            pass
+
+    def _ensure_session_id(self):
+        """尽力拿到 session_id：先正常取，空则重试最多 3 次（页面可能加载中）。
+        返回最终 _session_id（可能为空，交给调用方走 pending 兜底）。"""
+        self._log_session_url()
+        if self._session_id:
+            return self._session_id
+        if self._agent is not None and self._agent.is_connected:
+            for _ in range(3):
+                time.sleep(0.4)
+                self._log_session_url()
+                if self._session_id:
+                    break
+        return self._session_id
 
     def _worker_loop(self):
         while True:
@@ -516,6 +556,9 @@ class Api:
                 self._set_status("connecting", "正在加载 DeepSeek...")
                 self._set_status("connected")
 
+            # 本地流水：进会话先确保拿到 session_id（空则重试），再记用户输入
+            self._ensure_session_id()
+            chatlog.write(self._session_id, "user", text=user_text)
             # 首轮：用户消息。用 pre_send 在限流等待后再组装，确保期间的插话能搭车
             reply = self._agent.send(None, pre_send=lambda: self._build_message(
                 self._merge_pending([("用户消息", user_text)])))
@@ -546,6 +589,7 @@ class Api:
                                 self._js(
                                     f"addMessage('assistant', {json.dumps(txt, ensure_ascii=False)})"
                                 )
+                                chatlog.write(self._session_id, "assistant_text", text=txt)
                             continue
                         type_, id_, params, body = payload
                         # auto_mode 是控制流级动作，运行时拦截，不走普通执行器
@@ -581,6 +625,16 @@ class Api:
                         )
                         self._js("addActionEnd(" + json.dumps(info, ensure_ascii=False) + ")")
                         self._js("addHistory(" + json.dumps(info, ensure_ascii=False) + ")")
+                        chatlog.write(
+                            self._session_id, "tool",
+                            type=type_,
+                            target=(_get_param(params, "file")
+                                    or _get_param(params, "path")
+                                    or _get_param(params, "name")
+                                    or _get_param(params, "service") or ""),
+                            success=bool(info.get("success")),
+                            duration_ms=info.get("duration_ms"),
+                        )
                         if get_param_bool(params, "replay", True):
                             feedbacks.append(fb_text)
                     # 应用 auto_mode 指令（off 优先于 on）
@@ -600,6 +654,7 @@ class Api:
                     self._js(
                         f"addMessage('assistant', {json.dumps(reply, ensure_ascii=False)})"
                     )
+                    chatlog.write(self._session_id, "assistant_text", text=reply)
 
                 # 外层：决定是否继续下一轮
                 # 注意：这里【不】提前 drain pending——改为在 send 的 pre_send 回调里统一取，
@@ -651,6 +706,74 @@ class Api:
                 self._set_status("connected")
             else:
                 self._set_status("disconnected")
+
+    # ── 本地历史会话（单窗口信息本地化）──
+    def get_sessions(self):
+        """返回本地记录的会话清单（给前端"历史会话"弹窗用）。
+
+        每项：{session_id, time, title, url, count}
+        """
+        try:
+            return {"ok": True, "sessions": chatlog.list_sessions()}
+        except Exception as e:
+            return {"ok": False, "sessions": [], "error": str(e)}
+
+    def get_history(self, session_id):
+        """读取某会话的本地流水（给前端渲染用，tool 已补全 meta）。"""
+        try:
+            recs = self._enrich_tool_meta(chatlog.read_session(session_id))
+            return {"ok": True, "records": recs}
+        except Exception as e:
+            return {"ok": False, "records": [], "error": str(e)}
+
+    def open_session(self, session_id, url=""):
+        """恢复某会话：① 让 Chrome 跳转到该会话 URL；② 返回本地流水给前端渲染。
+
+        跳转必须调度到 worker 线程（agent 的 sync_playwright 在该线程创建）。
+        流水数据同步返回，前端据此渲染；跳转在后台完成。
+        """
+        # 先取流水（同步，快），tool 补全 meta 供前端还原卡片
+        try:
+            records = self._enrich_tool_meta(chatlog.read_session(session_id))
+        except Exception:
+            records = []
+        # 找 url：优先用传入的，其次从流水里找最后一条 kind=url 的
+        target_url = url or ""
+        if not target_url:
+            for r in records:
+                if r.get("kind") == "url" and r.get("url"):
+                    target_url = r["url"]
+        # 跳转：调度到 worker 线程
+        if target_url:
+            self._post(lambda u=target_url: self._do_open_session(u))
+        return {"ok": True, "records": records, "url": target_url}
+
+    def _do_open_session(self, url):
+        """（worker 线程内执行）让 agent 跳转到指定会话 URL。"""
+        try:
+            if self._agent is not None and self._agent.is_connected:
+                self._agent.goto_session(url)
+        except Exception as e:
+            self._audit("_do_open_session", {"url": url}, str(e), False)
+
+    def _enrich_tool_meta(self, records):
+        """给 tool 记录补全 icon/label/color（从 action_meta），供前端还原动作卡片。"""
+        try:
+            meta_map = self._config.get("action_meta") or {}
+            for r in records:
+                if r.get("kind") == "tool":
+                    am = meta_map.get(r.get("type"))
+                    if am:
+                        r["icon"] = am[0] if len(am) > 0 else ""
+                        r["label"] = am[1] if len(am) > 1 else r.get("type")
+                        r["color"] = am[2] if len(am) > 2 else "#8b949e"
+                    else:
+                        r["label"] = r.get("type") or "工具"
+                        r["color"] = "#8b949e"
+        except Exception:
+            pass
+        return records
+
 
     # ── 设置 ──
 
