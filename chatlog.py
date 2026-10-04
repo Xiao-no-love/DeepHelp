@@ -14,11 +14,19 @@
 import json
 import os
 import re
+import sys
 import time
 
-# 日志根目录：与 api.py 同级的 chat_logs/
-_HERE = os.path.dirname(os.path.abspath(__file__))
-LOG_DIR = os.path.join(_HERE, "chat_logs")
+# 运行时数据目录：与 action.py 的 _RUNTIME_DIR 同逻辑。
+# frozen（打包 exe）时为 exe 所在目录（可写、持久）；否则为源码目录。
+# 若直接用 __file__，打包版会指向 _MEIPASS 临时目录，exe 一关记录就丢。
+if getattr(sys, "frozen", False):
+    _RUNTIME_DIR = os.path.dirname(sys.executable)
+else:
+    _RUNTIME_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# 日志根目录：与 audit.log 同目录
+LOG_DIR = os.path.join(_RUNTIME_DIR, "chat_logs")
 
 # 从 DeepSeek 会话 URL 抽 UUID：.../a/chat/s/<uuid>
 _UUID_RE = re.compile(r"/s/([0-9a-fA-F-]{8,})")
