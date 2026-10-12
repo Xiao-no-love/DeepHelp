@@ -1,4 +1,0 @@
-chore: 误入的临时提交信息文件移出仓库 + gitignore 兜底
-
-上一次 commit 用 git add -A 时把临时文件 _commit_msg.txt 一并入库，
-本次 git rm --cached 移除，并加 .gitignore 规则防止再犯。
