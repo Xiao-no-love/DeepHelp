@@ -365,8 +365,10 @@
             }
         }
 
+        var virtualMsgTimer = null;   // 占位气泡的最长存活兜底定时器
         function virtualMessage(role) {
             clearInterval(randCharType);
+            if (virtualMsgTimer) { clearTimeout(virtualMsgTimer); virtualMsgTimer = null; }
             var div = document.createElement('div');
             div.className = 'msg ' + role;
             chatEl.appendChild(div);
@@ -386,10 +388,16 @@
                 scrollBottom(chatEl);
             }, 50);
             virtualMessageDiv = div;
+            // 兜底：占位气泡最多存活 20s，到期无条件清除，避免任何异常路径漏网导致空气泡
+            virtualMsgTimer = setTimeout(function () {
+                virtualMsgTimer = null;
+                consumeVirtual();
+            }, 20000);
         }
         // 消费未使用的打字机占位气泡：若 AI 本轮是纯动作/动作在前，占位会残留在那，
-        // 表现为「一条空消息」。动作卡片出现时调用它清掉占位。
+        // 表现为「一条空消息」。动作卡片出现时、以及本轮 setBusy(false) 时调用它清掉占位。
         function consumeVirtual() {
+            if (virtualMsgTimer) { clearTimeout(virtualMsgTimer); virtualMsgTimer = null; }
             if (virtualMessageDiv != null) {
                 if (randCharType) { clearInterval(randCharType); randCharType = null; }
                 if (virtualMessageDiv.parentNode) virtualMessageDiv.parentNode.removeChild(virtualMessageDiv);
@@ -1007,7 +1015,13 @@
                 else divider.classList.remove('thinking');
             }
             inputEl.placeholder = b ? '助手处理中…（仍可输入，将排队）' : '输入消息...';
-            if (!b) inputEl.focus();
+            if (!b) {
+                // 本轮处理完毕：兜底清掉可能残留的打字机占位气泡。
+                // 空气泡根因：占位气泡靠「下一条 assistant 消息」或「动作卡片」隐式消费；
+                // 若本轮 AI 回复为空/纯空白/只有被拦截的动作，就没人消费，残留成空气泡。
+                consumeVirtual();
+                inputEl.focus();
+            }
         }
         function send() {
             var text = inputEl.value.trim();
