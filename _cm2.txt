@@ -1,4 +1,0 @@
-chore: 再次移除误入的临时提交信息文件 _cm.txt
-
-上一 commit 的 git add -A 又把临时信息文件 _cm.txt 入库，
-本 commit 移除。后续提交统一用 .gitignore 已覆盖的 _commit_msg*.txt 命名。

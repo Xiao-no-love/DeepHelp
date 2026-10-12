@@ -46,5 +46,7 @@ HANDOFF.md
 # 本地对话流水（单窗口信息本地化，不入库）
 chat_logs/
 # 临时提交信息文件（勿入库）
+_cm*.txt
+_cm_*.txt
 _commit_msg*.txt
 _msg*.txt
